@@ -1,3 +1,4 @@
+![Unicode Test Suite](docs/ssocial_banner.png)
 # Unicode Test Suite Generator (UTS)
 
 > **A deterministic, reproducible benchmark corpus for Unicode and text-encoding detection.**
