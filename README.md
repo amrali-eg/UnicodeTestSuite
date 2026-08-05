@@ -9,6 +9,12 @@ Every generated file is deterministically produced from a canonical Unicode sour
 
 ---
 
+## Project
+
+- **Repository:** https://github.com/amrali-eg/UnicodeTestSuite
+- **Latest Releases:** https://github.com/amrali-eg/UnicodeTestSuite/releases
+- **Issue Tracker:** https://github.com/amrali-eg/UnicodeTestSuite/issues
+
 ## Features
 
 - Deterministic corpus generation
@@ -24,7 +30,55 @@ Every generated file is deterministically produced from a canonical Unicode sour
 - Extensible architecture
 - Public benchmark quality
 
-### Supported Content
+## Encoding Compatibility
+
+UnicodeTestSuite intentionally includes only character encodings that can be used reliably across both **Python** and **.NET**.
+
+When selecting encodings, priority was given to identifiers that satisfy the following requirements:
+
+* Supported by Python's standard `codecs` module.
+* Supported by `.NET Encoding.GetEncoding()`.
+* Represent a single, well-defined encoding implementation.
+* Avoid ambiguous aliases that resolve to different implementations across platforms.
+
+Several encodings and aliases were intentionally excluded because they either duplicate another implementation or cannot be resolved consistently in .NET. For example:
+
+* `cp932` is represented by `shift_jis`.
+* `gbk` is represented by `gb2312` in .NET.
+* Unsupported ISO-8859 variants and ambiguous aliases were removed after live validation.
+
+As a result, every encoding name used throughout the corpus can be parsed directly by both Python and .NET without requiring custom lookup tables.
+
+## Filename Format
+
+Every generated filename follows the format:
+
+```text
+DocumentID_CategoryCode_CategoryName_Title_Encoding_[BOM_]LineEnding.ext
+```
+
+Example:
+
+```text
+DOC000036_10_Latin_Norwegian_windows-1253_LF.txt
+DOC000066_15_CJK_Japanese_utf-16LE_BOM_LF.txt
+```
+
+The filename format was specifically designed for automated processing.
+
+### Parsing Guarantees
+
+The following properties are guaranteed for every document-derived filename:
+
+* The encoding identifier is always the **fifth token** (index **4**) when splitting the filename on `_`.
+* The category is always represented by a numeric code followed by its name.
+* The optional `BOM` token appears only when a Byte Order Mark is present.
+* Hyphens inside encoding names are preserved.
+* Underscores inside encoding identifiers are converted to hyphens in filenames only, preventing the encoding from being split into multiple tokens.
+
+These guarantees allow filenames to be parsed without consulting `Manifest.csv`, making the corpus suitable for automated testing and validation tools.
+
+### Supported Encodings
 
 #### Unicode Transformation Formats
 
@@ -76,13 +130,13 @@ the generated corpus is guaranteed to be **byte-for-byte identical**.
 
 ## Corpus Contents
 
-Version **1.0** contains approximately:
+Version 1.0 contains approximately:
 
 | Item | Count |
 |------|------:|
 | Categories | ~14 |
 | Supported encodings | ~51 |
-| Canonical documents | ~94 |
+| Canonical documents | 94 |
 | Generated files | ~1,300 |
 
 The corpus includes:
@@ -183,11 +237,12 @@ Every generated corpus records:
 
 ```text
 UnicodeTestSuiteGenerator/
-¦
-+-- generator/                 # Corpus generator
+Â¦
++-- GenerateCorpus.py          # Corpus generator
++-- generator/                 # Generator source code
 +-- Source/                    # Optional document overrides
 +-- UnicodeTestSuite/          # Generated benchmark corpus
-    ¦
+    Â¦
     +--- Manifest.csv
     +--- Manifest.sqlite
     +--- MasterHashes.sha256
@@ -196,7 +251,6 @@ UnicodeTestSuiteGenerator/
     +--- Statistics.txt
     +--- README.md
 ```
-
 ---
 
 ## Intended Uses

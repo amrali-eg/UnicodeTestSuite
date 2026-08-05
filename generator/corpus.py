@@ -83,17 +83,18 @@ class GeneratedFile:
 
 
 def _category_folder_token(doc: Document) -> str:
-    """Directory-name token for a document's category, e.g. '06-CJK'."""
-    if doc.category_code:
-        return f"{doc.category_code}-{doc.category_name}"
-    return doc.category_name
+    """Directory-name token for a document's category, e.g. '15-CJK'."""
+    return f"{doc.category_code}-{doc.category_name}"
 
 
 def _category_filename_tokens(doc: Document) -> list[str]:
-    """Filename tokens for a document's category, e.g. ['06', 'CJK']."""
-    if doc.category_code:
-        return [doc.category_code, doc.category_name]
-    return [doc.category_name]
+    """Filename tokens for a document's category, e.g. ['06', 'CJK'].
+
+    Always two tokens: every document (ASCII or shared) has a numeric
+    category code, so the encoding field always lands at the same
+    position when a filename is split on "_" - see filenames.py.
+    """
+    return [doc.category_code, doc.category_name]
 
 
 def _line_ending_variants(text: str) -> list[tuple[str, str]]:
@@ -155,22 +156,22 @@ def _write_and_verify_text(
 
 def _ascii_spec() -> EncodingSpec:
     for spec in CORE_UNICODE_SPECS:
-        if spec.label == "ASCII":
+        if spec.label == "us-ascii":
             return spec
-    raise RuntimeError("ASCII spec not found in CORE_UNICODE_SPECS")
+    raise RuntimeError("us-ascii spec not found in CORE_UNICODE_SPECS")
 
 
 def _core_unicode_specs_excluding_ascii() -> tuple[EncodingSpec, ...]:
-    return tuple(spec for spec in CORE_UNICODE_SPECS if spec.label != "ASCII")
+    return tuple(spec for spec in CORE_UNICODE_SPECS if spec.label != "us-ascii")
 
 
 def _generate_documentation_copies(root: Path, documents: list[Document]) -> list[GeneratedFile]:
     """Write each canonical document as plain UTF-8/LF text for reference."""
     results: list[GeneratedFile] = []
-    spec = EncodingSpec("UTF8", "utf-8", b"", DOC_FOLDER, None)
+    spec = EncodingSpec("utf-8", "utf-8", b"", DOC_FOLDER, None)
     for doc in documents:
         tokens = _category_filename_tokens(doc)
-        filename = build_filename(doc.doc_id, tokens, doc.title, "UTF8", "NoBOM", "LF")
+        filename = build_filename(doc.doc_id, tokens, doc.title, "utf-8", "NoBOM", "LF")
         relative_path = _posix_path(DOC_FOLDER, filename)
         category_display = _category_folder_token(doc)
         results.append(_write_and_verify_text(root, relative_path, doc.text, spec, doc.doc_id, category_display, "LF"))
@@ -206,10 +207,12 @@ def _generate_ascii_folder(root: Path, documents: list[Document]) -> list[Genera
         if doc.group != "ASCII":
             continue
         for line_label, variant_text in _default_line_ending(doc.text):
-            filename = build_filename(doc.doc_id, [doc.category_name], doc.title, spec.label, spec.bom_label, line_label)
-            relative_path = _posix_path(ASCII_ROOT_FOLDER, doc.category_name, filename)
+            tokens = _category_filename_tokens(doc)
+            filename = build_filename(doc.doc_id, tokens, doc.title, spec.label, None, line_label)
+            category_folder = _category_folder_token(doc)
+            relative_path = _posix_path(ASCII_ROOT_FOLDER, category_folder, filename)
             results.append(_write_and_verify_text(
-                root, relative_path, variant_text, spec, doc.doc_id, doc.category_name, line_label,
+                root, relative_path, variant_text, spec, doc.doc_id, category_folder, line_label,
             ))
     return results
 
@@ -251,7 +254,7 @@ def _generate_legacy_families(root: Path, documents: list[Document]) -> list[Gen
                     continue
                 for line_label, variant_text in _default_line_ending(doc.text):
                     tokens = _category_filename_tokens(doc)
-                    filename = build_filename(doc.doc_id, tokens, doc.title, spec.label, spec.bom_label, line_label)
+                    filename = build_filename(doc.doc_id, tokens, doc.title, spec.label, None, line_label)
                     category_folder = _category_folder_token(doc)
                     relative_path = _posix_path(spec.root_folder, spec.family_subfolder, category_folder, filename)
                     results.append(_write_and_verify_text(
@@ -297,9 +300,10 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
     by_id = {d.doc_id: d for d in documents}
     # One representative document per category (mix of ASCII and shared groups).
     showcase_ids = [
-        "DOC000001", "DOC000004", "DOC000007", "DOC000010", "DOC000013", "DOC000016", "DOC000019", "DOC000022", "DOC000025",
+        "DOC000001", "DOC000004", "DOC000007", "DOC000010", "DOC000013",
+        "DOC000016", "DOC000019", "DOC000022", "DOC000025",
     ]
-    spec = EncodingSpec("UTF8", "utf-8", b"", LINE_ENDING_FOLDER, None)
+    spec = EncodingSpec("utf-8", "utf-8", b"", LINE_ENDING_FOLDER, None)
     results: list[GeneratedFile] = []
     for doc_id in showcase_ids:
         doc = by_id.get(doc_id)
@@ -307,7 +311,7 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
             continue
         for line_label, variant_text in _line_ending_variants(doc.text):
             tokens = _category_filename_tokens(doc)
-            filename = build_filename(doc.doc_id, tokens, doc.title, "UTF8", "NoBOM", line_label)
+            filename = build_filename(doc.doc_id, tokens, doc.title, "utf-8", "NoBOM", line_label)
             relative_path = _posix_path(LINE_ENDING_FOLDER, filename)
             results.append(_write_and_verify_text(
                 root, relative_path, variant_text, spec, doc.doc_id, _category_folder_token(doc), line_label,
@@ -324,7 +328,7 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
     digest = sha256_bytes(data)
     verify_text_file(full_path, spec, no_newline_text, digest, len(data))
     results.append(GeneratedFile(
-        doc_id="N/A", category="LineEndings", encoding_label="UTF8", bom="NoBOM",
+        doc_id="N/A", category="LineEndings", encoding_label="utf-8", bom="NoBOM",
         line_ending="None", characters=len(no_newline_text), size_bytes=len(data),
         sha256=digest, relative_path=no_newline_path,
     ))
@@ -340,7 +344,7 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
     digest = sha256_bytes(data)
     verify_text_file(full_path, spec, mixed_text, digest, len(data))
     results.append(GeneratedFile(
-        doc_id="N/A", category="LineEndings", encoding_label="UTF8", bom="NoBOM",
+        doc_id="N/A", category="LineEndings", encoding_label="utf-8", bom="NoBOM",
         line_ending="Mixed", characters=len(mixed_text), size_bytes=len(data),
         sha256=digest, relative_path=mixed_path,
     ))
@@ -351,10 +355,10 @@ def _generate_large_files(root: Path, documents: list[Document]) -> list[Generat
     """14_LargeFiles: amplify a few representative documents into multi-MB files."""
     by_id = {d.doc_id: d for d in documents}
     plan = [
-        ("DOC000064", "UTF8", "utf-8", b"", 3),        # a CJK doc
-        ("DOC000031", "UTF16LE", "utf-16-le", b"\xff\xfe", 2),  # a Latin doc
-        ("DOC000001", "UTF8", "utf-8", b"", 4),         # an ASCII/Programming doc
-        ("DOC000094", "UTF8", "utf-8", b"", 3),         # a UnicodeMisc doc
+        ("DOC000064", "utf-8", "utf-8", b"", 3),        # a CJK doc
+        ("DOC000031", "utf-16LE", "utf-16-le", b"\xff\xfe", 2),  # a Latin doc
+        ("DOC000001", "utf-8", "utf-8", b"", 4),         # an ASCII/Programming doc
+        ("DOC000094", "utf-8", "utf-8", b"", 3),         # a UnicodeMisc doc
     ]
     results: list[GeneratedFile] = []
     for doc_id, enc_label, codec, bom, target_mb in plan:

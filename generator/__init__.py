@@ -7,4 +7,4 @@ package depends on anything outside the Python 3.11 standard library.
 
 # Bump this whenever the generation logic (documents, encodings, layout,
 # or filename scheme) changes in a way that would alter the corpus output.
-GENERATOR_VERSION = "1.0.0"
+GENERATOR_VERSION = "2.0.0"

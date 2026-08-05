@@ -28,10 +28,10 @@ reordered - new documents may only be appended to the end of a
 category's list, and categories may only be appended at the end of
 ASCII_CATEGORIES / SHARED_CATEGORIES.
 
-An optional Source/ directory next to GenerateCorpus.py lets a document
-be overridden: if Source/<doc_id>.txt exists, its content (decoded as
-UTF-8) replaces the built-in text below. This is entirely optional -
-the generator is fully runnable with an empty Source/ directory.
+An optional Source/ directory next to GenerateCorpus.py lets a
+document be overridden: if Source/<doc_id>.txt exists, its content
+(decoded as UTF-8) replaces the built-in text below. Entirely
+optional.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from generator.categories import ASCII_CATEGORIES, SHARED_CATEGORIES, SharedCategory
+from generator.categories import ASCII_CATEGORIES, SHARED_CATEGORIES, Category
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ class Document:
 
     doc_id: str
     group: str            # "ASCII" or "Shared"
-    category_code: str      # "" for ASCII docs, e.g. "06" for shared docs
+    category_code: str      # two-digit code, e.g. "11" for ASCII docs, "06" for shared docs
     category_name: str       # e.g. "Programming" or "CJK"
     title: str
     text: str
@@ -208,7 +208,7 @@ _UNICODE_MISC_RAW: list[tuple[str, str]] = [
         ('CurrencySymbols', '$ € £ ¥ ₽ ₹ ₩\n'),
 ]
 
-# Maps each SharedCategory name to its raw document list, in the fixed
+# Maps each shared Category's name to its raw document list, in the fixed
 # SHARED_CATEGORIES order (see generator/categories.py).
 _SHARED_RAW: dict[str, list[tuple[str, str]]] = {
     "Latin": _LATIN_RAW,
@@ -235,11 +235,11 @@ def _build_documents() -> list[Document]:
     counter = 1
 
     for category in ASCII_CATEGORIES:
-        for title, text in _ASCII_RAW.get(category, []):
+        for title, text in _ASCII_RAW.get(category.name, []):
             doc_id = f"DOC{counter:06d}"
             documents.append(Document(
-                doc_id=doc_id, group="ASCII", category_code="", category_name=category,
-                title=title, text=text,
+                doc_id=doc_id, group="ASCII", category_code=category.code,
+                category_name=category.name, title=title, text=text,
             ))
             counter += 1
 

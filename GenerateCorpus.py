@@ -78,16 +78,19 @@ see generator/documents.py for the full rationale.
 
 - `00_Documentation/` - every document in plain UTF-8/LF, plus
   Categories.txt, Encodings.txt, and SourceDocumentsIndex.txt.
-- `01_ASCII/<Category>/` - the nine ASCII-only categories (Programming,
-  JSON, XML, HTML, Markdown, CSV, Logs, Config, RandomASCII).
-- `02_UTF8/` .. `06_UTF32BE/<code>-<Name>/` - the ten shared categories,
-  BOM and NoBOM, in each of the five core Unicode Transformation Formats.
-- `07_WindowsCodePages/<Codepage>/<code>-<Name>/` - Windows-1250..1258.
-- `08_ISO8859/<Part>/<code>-<Name>/` - ISO-8859 parts 1-16 (part 12 excluded).
-- `09_EastAsian/<Codec>/<code>-<Name>/` - Shift-JIS, CP932, EUC-JP,
-  ISO-2022-JP, GB2312, GBK, GB18030, Big5, Big5-HKSCS, HZ, EUC-KR,
-  CP949, ISO-2022-KR, Windows-874, TIS-620.
-- `10_Cyrillic/<Codec>/<code>-<Name>/` - KOI8-R, KOI8-U.
+- `01_ASCII/<code>-<Name>/` - the nine ASCII-only categories (codes
+  01-09: Programming, JSON, XML, HTML, Markdown, CSV, Logs, Config,
+  RandomASCII).
+- `02_UTF8/` .. `06_UTF32BE/<code>-<Name>/` - the ten shared categories
+  (codes 10-19), BOM and NoBOM, in each of the five core Unicode
+  Transformation Formats.
+- `07_WindowsCodePages/<Codepage>/<code>-<Name>/` - windows-1250..1258.
+- `08_ISO8859/<Part>/<code>-<Name>/` - iso-8859-1, -2, -3, -4, -5, -6,
+  -7, -8, -9, -13, -15 (11 parts; see "Encoding names and .NET" below
+  for why parts 10, 11, 14, and 16 aren't included).
+- `09_EastAsian/<Codec>/<code>-<Name>/` - shift_jis, euc-jp, gb2312,
+  gb18030, big5, euc-kr, iso-2022-kr (7 codecs).
+- `10_Cyrillic/<Codec>/<code>-<Name>/` - koi8-r, koi8-u.
 - `11_InvalidUnicode/` - deliberately malformed byte sequences, not
   derived from any document, for decoder-failure testing.
 - `12_LineEndings/` - a curated CR/LF/CRLF/None showcase, plus one file
@@ -97,17 +100,93 @@ see generator/documents.py for the full rationale.
   Random) plus general binary edge fixtures.
 - `14_LargeFiles/` - a handful of multi-megabyte amplified documents.
 
-Every other folder (01-10) uses a single default LF-terminated file per
-document; the full CR/LF/CRLF/None line-ending matrix lives only in
+Every category - ASCII or shared - has a numeric code, and codes
+follow tree order: the nine ASCII-only categories (used only in
+01_ASCII, the first root folder) get codes 01-09, and the ten shared
+categories (used starting from 02_UTF8, the second root folder) get
+codes 10-19. Every code in the corpus is globally unique. Every other
+folder (01-10) uses a single default LF-terminated file per document;
+the full CR/LF/CRLF/None line-ending matrix lives only in
 `12_LineEndings/`, by design, to keep the corpus at its intended size.
+
+## Encoding names and .NET
+
+Encoding names throughout (folder names and the Encoding field in
+filenames/Manifest.csv) were chosen as the best match between Python's
+codec names and .NET's `Encoding.GetEncoding` names, verified against
+both. **On .NET Core / .NET 5+, only ASCII, ISO-8859-1, and UTF-7/8/16/32
+resolve out of the box.** Every other name here (all of Windows-125x,
+ISO-8859-2..16, Shift-JIS, GB18030, Big5, KOI8-R/U, etc.) requires the
+app to add the `System.Text.Encoding.CodePages` package and call
+`Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)` once at
+startup - only .NET Framework has them built in. Without that call,
+`Encoding.GetEncoding(...)` throws `NotSupportedException` for every
+name outside that first group, regardless of how correct the name is.
+
+A number of legacy encodings Python distinguishes have no clean,
+unambiguous .NET equivalent at all and were left out of the corpus
+rather than given a guessed, colliding, or silently-wrong name:
+
+- **CP932, GBK** - .NET has no distinct identity from Shift-JIS/GB2312
+  respectively; it literally returns the other encoding by name
+  (confirmed: dotnet/runtime#43745).
+- **ISO-2022-JP, Big5-HKSCS, HZ, TIS-620** - no confirmed .NET code
+  page at all.
+- **ISO-8859-10, -14, -16** - confirmed by live testing, not just
+  research: `Encoding.GetEncoding(28600)` (part 10's code page number)
+  throws "No data is available for encoding 28600" even with
+  `CodePagesEncodingProvider` registered, meaning the code page was
+  never actually implemented in .NET, by number or by name. Parts 14
+  and 16 were never real Windows code pages either and are assumed to
+  fail the same way.
+- **ISO-8859-11** - confirmed by live testing to be a *silent*
+  mismatch rather than a clean failure: `Encoding.GetEncoding("iso-8859-11")`
+  does not throw, but returns .NET's "Thai (Windows)" encoding - code
+  page 874, not a genuine distinct ISO-8859-11 implementation. Python's
+  `iso8859-11` and `cp874` codecs are confirmed to disagree across the
+  whole 0x80-0x9F range, so this name would satisfy "GetEncoding
+  doesn't throw" while potentially handing back a decoder that
+  disagrees with the actual file bytes - worse than an honest failure.
+- **CP874, CP949** - confirmed by live testing (with
+  `CodePagesEncodingProvider` registered) that `"cp874"` and `"cp949"`
+  both throw in .NET. No alternate name works in both ecosystems
+  either: .NET's own names for these code pages ("windows-874" and
+  "ks_c_5601-1987") are not valid Python names for the same codecs -
+  "windows-874" isn't a recognized Python alias for `cp874`, and
+  "ks_c_5601-1987" is a Python alias for a *different* codec (`euc_kr`),
+  not `cp949`. Two further CP949 candidates suggested by Python's own
+  alias list, `"ms949"` and `"uhc"`, were also tested live in .NET and
+  both throw as well.
 
 ## Filenames
 
-Every filename fully describes its own content, e.g.:
+Every filename fully describes its own content - and its encoding can
+be parsed directly from the filename alone, without consulting the
+manifest - e.g.:
 
-    DOC000066_06_CJK_Japanese_UTF16LE_BOM_LF.txt
+    DOC000123_15_CJK_Japanese_utf-16LE_BOM_CRLF.txt
+    DOC000028_10_Latin_English_iso-8859-1_LF.txt
+    DOC000014_05_Markdown_List_us-ascii_LF.txt
 
-`DocumentID_[Code_]CategoryName_Title_Encoding_BOM_LineEnding.txt`
+`DocumentID_CategoryCode_CategoryName_Title_Encoding_[BOM_]LineEnding.txt`
+
+Every category (ASCII or shared) has a numeric code, so this format
+never varies in field count except for the optional BOM field: split a
+filename on "_" and the Encoding is always at index 4 (the 5th token),
+regardless of category or whether BOM is present:
+
+    index 0: DocumentID
+    index 1: CategoryCode
+    index 2: CategoryName
+    index 3: Title
+    index 4: Encoding   <- always here
+    index 5: BOM (present only for encodings that have a BOM concept)
+    last:    LineEnding
+
+A value containing "_" (e.g. the Python codec name "shift_jis") is
+normalized to "-" in filenames only ("shift-jis"), so it can never be
+mistaken for a field boundary; Manifest.csv and the folder name still
+carry the exact, unmodified codec name.
 
 ## Determinism
 
@@ -131,7 +210,7 @@ or, on Linux/macOS, using the standard `sha256sum` format directly:
 
 ## Source/ overrides (optional)
 
-If a file named `Source/<DOC_ID>.txt` exists next to
+If a file named `Source/<DocumentID>.txt` exists next to
 GenerateCorpus.py (e.g. `Source/DOC000001.txt`), its UTF-8 content
 replaces that document's built-in text before generation. Entirely
 optional; an empty `Source/` directory is the normal, expected state.
