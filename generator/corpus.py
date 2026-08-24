@@ -33,12 +33,14 @@ from generator.categories import (
     category_by_name,
 )
 from generator.documents import Document, load_documents
+from generator.equivalence import compatible_encodings
 from generator.encoder import (
     CORE_UNICODE_SPECS,
     LEGACY_FAMILIES,
     EncodingSpec,
     can_encode,
     encode_with_bom,
+    strip_bom,
 )
 from generator.filenames import assert_filename_contract, build_filename, sanitize_component
 from generator.hashing import sha256_bytes
@@ -80,9 +82,11 @@ class GeneratedFile:
     """One row of metadata describing a single generated corpus file."""
 
     doc_id: str
-    category: str
+    category_code: str          # "15", or "" for fixtures with no numbered category
+    category: str               # plain name, e.g. "CJK" - never the "15-CJK" slug
     encoding_label: str
     bom: str
+    also_valid_as: tuple[str, ...]  # other encodings that decode these bytes identically
     line_ending: str
     characters: int
     size_bytes: int
@@ -138,7 +142,8 @@ def _write_and_verify_text(
     text: str,
     spec: EncodingSpec,
     doc_id: str,
-    category_display: str,
+    category_code: str,
+    category_name: str,
     line_ending_label: str,
 ) -> GeneratedFile:
     # Every file written through this function is document-derived, so the
@@ -156,9 +161,11 @@ def _write_and_verify_text(
 
     return GeneratedFile(
         doc_id=doc_id,
-        category=category_display,
+        category_code=category_code,
+        category=category_name,
         encoding_label=spec.label,
         bom=spec.bom_label,
+        also_valid_as=compatible_encodings(strip_bom(data, spec), spec.label, text),
         line_ending=line_ending_label,
         characters=len(text),
         size_bytes=len(data),
@@ -186,8 +193,7 @@ def _generate_documentation_copies(root: Path, documents: list[Document]) -> lis
         tokens = _category_filename_tokens(doc)
         filename = build_filename(doc.doc_id, tokens, doc.title, "utf-8", "NoBOM", "LF")
         relative_path = _posix_path(DOC_FOLDER, filename)
-        category_display = _category_folder_token(doc)
-        results.append(_write_and_verify_text(root, relative_path, doc.text, spec, doc.doc_id, category_display, "LF"))
+        results.append(_write_and_verify_text(root, relative_path, doc.text, spec, doc.doc_id, doc.category_code, doc.category_name, "LF"))
 
     categories_text = "\n".join(sorted({_category_folder_token(d) for d in documents})) + "\n"
     results.append(_write_plain_reference(root, _posix_path(DOC_FOLDER, "Categories.txt"), categories_text))
@@ -224,9 +230,11 @@ def _write_plain_reference(root: Path, relative_path: str, text: str) -> Generat
     verify_binary_file(full_path, digest, len(data))
     return GeneratedFile(
         doc_id="N/A",
+        category_code="",
         category="Documentation",
         encoding_label="utf-8",
         bom="NoBOM",
+        also_valid_as=(),
         line_ending="LF",
         characters=len(text),
         size_bytes=len(data),
@@ -248,7 +256,7 @@ def _generate_ascii_folder(root: Path, documents: list[Document]) -> list[Genera
             category_folder = _category_folder_token(doc)
             relative_path = _posix_path(ASCII_ROOT_FOLDER, category_folder, filename)
             results.append(_write_and_verify_text(
-                root, relative_path, variant_text, spec, doc.doc_id, category_folder, line_label,
+                root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
             ))
     return results
 
@@ -274,7 +282,7 @@ def _generate_core_unicode_folders(root: Path, documents: list[Document]) -> lis
                 category_folder = _category_folder_token(doc)
                 relative_path = _posix_path(spec.root_folder, category_folder, filename)
                 results.append(_write_and_verify_text(
-                    root, relative_path, variant_text, spec, doc.doc_id, category_folder, line_label,
+                    root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
                 ))
     return results
 
@@ -294,7 +302,7 @@ def _generate_legacy_families(root: Path, documents: list[Document]) -> list[Gen
                     category_folder = _category_folder_token(doc)
                     relative_path = _posix_path(spec.root_folder, spec.family_subfolder, category_folder, filename)
                     results.append(_write_and_verify_text(
-                        root, relative_path, variant_text, spec, doc.doc_id, category_folder, line_label,
+                        root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
                     ))
     return results
 
@@ -324,8 +332,9 @@ def _generate_invalid_unicode_files(root: Path) -> list[GeneratedFile]:
         digest = sha256_bytes(data)
         verify_binary_file(full_path, digest, len(data))
         results.append(GeneratedFile(
-            doc_id="N/A", category="InvalidUnicode", encoding_label="Binary",
-            bom="N/A", line_ending="N/A", characters=0,
+            doc_id="N/A", category_code="", category="InvalidUnicode",
+            encoding_label="Binary", bom="N/A", also_valid_as=(),
+            line_ending="N/A", characters=0,
             size_bytes=len(data), sha256=digest, relative_path=relative_path,
         ))
     return results
@@ -352,7 +361,7 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
             filename = build_filename(doc.doc_id, tokens, doc.title, "utf-8", "NoBOM", line_label)
             relative_path = _posix_path(LINE_ENDING_FOLDER, filename)
             results.append(_write_and_verify_text(
-                root, relative_path, variant_text, spec, doc.doc_id, _category_folder_token(doc), line_label,
+                root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
             ))
 
     # Two explicit edge cases that are not derived from any canonical
@@ -381,7 +390,7 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
         filename = build_filename(doc_id, edge_tokens, title, spec.label, spec.bom_label, line_label)
         relative_path = _posix_path(LINE_ENDING_FOLDER, filename)
         results.append(_write_and_verify_text(
-            root, relative_path, text, spec, doc_id, edge_category.slug, line_label,
+            root, relative_path, text, spec, doc_id, edge_category.code, edge_category.name, line_label,
         ))
 
     return results
@@ -408,7 +417,7 @@ def _generate_large_files(root: Path, documents: list[Document]) -> list[Generat
         filename = build_filename(doc.doc_id, tokens, f"{doc.title}x{repeats}", enc_label, spec.bom_label, "LF")
         relative_path = _posix_path(LARGE_FILE_FOLDER, filename)
         results.append(_write_and_verify_text(
-            root, relative_path, large_text, spec, doc.doc_id, _category_folder_token(doc), "LF",
+            root, relative_path, large_text, spec, doc.doc_id, doc.category_code, doc.category_name, "LF",
         ))
     return results
 
@@ -432,7 +441,6 @@ def _generate_long_form(root: Path, project_root: Path) -> list[GeneratedFile]:
         return []
 
     tokens = [LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name]
-    category_folder = LONGFORM_CATEGORY.slug
 
     utf8_specs = (
         EncodingSpec("utf-8", "utf-8", b"", LONGFORM_FOLDER, None),
@@ -447,7 +455,7 @@ def _generate_long_form(root: Path, project_root: Path) -> list[GeneratedFile]:
                 doc.doc_id, tokens, doc.title, spec.label, spec.bom_label, "LF")
             relative_path = _posix_path(LONGFORM_FOLDER, spec.label, filename)
             results.append(_write_and_verify_text(
-                root, relative_path, doc.text, spec, doc.doc_id, category_folder, "LF",
+                root, relative_path, doc.text, spec, doc.doc_id, LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name, "LF",
             ))
 
         for spec in legacy_specs:
@@ -457,7 +465,7 @@ def _generate_long_form(root: Path, project_root: Path) -> list[GeneratedFile]:
                 doc.doc_id, tokens, doc.title, spec.label, None, "LF")
             relative_path = _posix_path(LONGFORM_FOLDER, sanitize_component(spec.label), filename)
             results.append(_write_and_verify_text(
-                root, relative_path, doc.text, spec, doc.doc_id, category_folder, "LF",
+                root, relative_path, doc.text, spec, doc.doc_id, LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name, "LF",
             ))
     return results
 

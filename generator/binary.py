@@ -157,8 +157,9 @@ def generate_binary_fixtures(
             digest = sha256_bytes(data)
             verify_binary_file(full_path, digest, len(data))
             results.append(generated_file_cls(
-                doc_id="N/A", category=category, encoding_label="Binary",
-                bom="N/A", line_ending="N/A", characters=0,
+                doc_id="N/A", category_code="", category=category,
+                encoding_label="Binary", bom="N/A", also_valid_as=(),
+                line_ending="N/A", characters=0,
                 size_bytes=len(data), sha256=digest, relative_path=relative_path,
             ))
 
@@ -194,8 +195,9 @@ def generate_binary_fixtures(
         digest = sha256_bytes(data)
         verify_binary_file(full_path, digest, len(data))
         results.append(generated_file_cls(
-            doc_id="N/A", category="Random", encoding_label="Binary",
-            bom="N/A", line_ending="N/A", characters=0,
+            doc_id="N/A", category_code="", category="Random",
+            encoding_label="Binary", bom="N/A", also_valid_as=(),
+            line_ending="N/A", characters=0,
             size_bytes=len(data), sha256=digest, relative_path=relative_path,
         ))
 

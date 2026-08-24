@@ -117,6 +117,15 @@ _ASCII_RAW: dict[str, list[tuple[str, str]]] = {
 # Shared documents (identical logical corpus across Unicode encodings)
 # ---------------------------------------------------------------------
 
+# English is deliberately left pure ASCII. English genuinely has no
+# diacritics, and one honestly ASCII document in the Latin category is
+# worth keeping: it is the corpus's clearest case of legitimately
+# ambiguous ground truth, valid under every ASCII-superset encoding at
+# once. The manifest's AlsoValidAs column now states that explicitly
+# rather than asserting a single correct answer (see
+# generator/equivalence.py). Dutch, Norwegian and Hungarian were ASCII
+# only by accident - all three languages use diacritics - so they now
+# carry them.
 _LATIN_RAW: list[tuple[str, str]] = [
         ('English', 'Hello, how are you today?\nThe quick brown fox jumps over the lazy dog.\n'),
         ('French', 'Le café est prêt. Voilà une crème brûlée.\nÀ bientôt, mon ami!\n'),
@@ -124,15 +133,15 @@ _LATIN_RAW: list[tuple[str, str]] = [
         ('Spanish', '¿Cómo estás? Mañana iré al parque.\n'),
         ('Italian', 'Buongiorno! Come stai oggi?\nLa città è molto bella.\n'),
         ('Portuguese', 'A criação começou ontem à noite.\n'),
-        ('Dutch', 'Goedemorgen! Hoe gaat het met je?\n'),
+        ('Dutch', 'Goedemorgen! Hoe gaat het met jou?\nEén café, alsjeblieft.\n'),
         ('Swedish', 'Hej! Hur mår du idag?\n'),
-        ('Norwegian', 'Hei! Hvordan har du det?\n'),
+        ('Norwegian', 'Hei! Hvordan går det med deg?\n'),
         ('Danish', 'Hej! Hvordan går det?\n'),
         ('Finnish', 'Hei! Mitä kuuluu?\n'),
         ('Polish', 'Cześć! Dziękuję bardzo za pomoc.\n'),
         ('Czech', 'Ahoj! Jak se máš dnes?\n'),
         ('Slovak', 'Ahoj! Ako sa máš?\n'),
-        ('Hungarian', 'Szia! Hogy vagy ma?\n'),
+        ('Hungarian', 'Szia! Hogy vagy ma?\nJó reggelt kívánok!\n'),
         ('Romanian', 'Bună! Ce mai faci astăzi?\n'),
 ]
 
@@ -169,8 +178,8 @@ _SEA_RAW: list[tuple[str, str]] = [
 ]
 
 _CJK_RAW: list[tuple[str, str]] = [
-        ('ChineseSimplified', '你好，世界！\n'),
-        ('ChineseTraditional', '你好，世界！\n'),
+        ('ChineseSimplified', '你好，世界！\n汉字、国家、学习。\n'),
+        ('ChineseTraditional', '你好，世界！\n漢字、國家、學習。\n'),
         ('Japanese', 'こんにちは、世界。\n'),
         ('Korean', '안녕하세요! 세계\n'),
 ]
