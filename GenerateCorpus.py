@@ -76,6 +76,13 @@ Unicode block rather than hand-composed sentences, which removes any
 risk of transcription error and guarantees genuine block coverage -
 see generator/documents.py for the full rationale.
 
+The long-form documents in 15_LongForm are a separate set, drawn from
+the UDHR in Unicode project: the Universal Declaration of Human Rights,
+published by the United Nations, in a plain-text preparation by that
+project. They exist because detection needs length that round-trip
+testing does not. Their source files, copyright notices intact, and the
+full provenance record are in data/udhr/ in the generator repository.
+
 ## Layout
 
 - `00_Documentation/` - every document in plain UTF-8/LF, plus
@@ -95,12 +102,22 @@ see generator/documents.py for the full rationale.
 - `10_Cyrillic/<Codec>/<code>-<Name>/` - koi8-r, koi8-u.
 - `11_InvalidUnicode/` - deliberately malformed byte sequences, not
   derived from any document, for decoder-failure testing.
-- `12_LineEndings/` - a curated CR/LF/CRLF/None showcase, plus one file
-  with mixed line endings within a single document.
+- `12_LineEndings/` - a curated CR/LF/CRLF/None showcase over ASCII
+  documents in UTF-8, plus one file with mixed line endings within a
+  single document, plus `Matrix/<Encoding>/`: three documents (Latin,
+  Cyrillic, CJK) in every core Unicode encoding and each legacy codec
+  that can represent them, in CR, LF and CRLF. The matrix is where
+  patterns like `0D 00 0A 00` - CRLF in UTF-16LE - live.
 - `13_Binary/<Category>/` - synthetic binary-format-signature stubs
   (EXE, DLL, PNG, JPG, GIF, ZIP, PDF, Office, Audio, Video, SQLite,
   Random) plus general binary edge fixtures.
 - `14_LargeFiles/` - a handful of multi-megabyte amplified documents.
+- `15_LongForm/<Encoding>/` - multi-kilobyte natural-language text, one
+  document per language, in every encoding capable of representing it.
+  The per-category documents elsewhere are short by design, which suits
+  round-trip testing but is far below what a statistical detector needs
+  to classify; these are the samples where byte-frequency and bigram
+  models can actually converge.
 
 Every category - ASCII or shared - has a numeric code, and codes
 follow tree order: the nine ASCII-only categories (used only in
@@ -190,6 +207,46 @@ normalized to "-" in filenames only ("shift-jis"), so it can never be
 mistaken for a field boundary; Manifest.csv and the folder name still
 carry the exact, unmodified codec name.
 
+This is checked for every document-derived file as it is written, and
+generation aborts rather than emitting a filename that breaks it.
+
+Three groups of files are deliberately NOT document-derived and do not
+follow the format: the `.bin` fixtures under 11_InvalidUnicode/ and
+13_Binary/, and the three reference files in 00_Documentation/
+(Categories.txt, Encodings.txt, SourceDocumentsIndex.txt). Filter on
+".txt" with a "DOC"-prefixed DocumentID, or read Manifest.csv.
+
+## Detection ground truth (Manifest.csv)
+
+Manifest.csv columns are:
+
+    DocumentID, CategoryCode, Category, Encoding, BOM, AlsoValidAs,
+    LineEnding, Characters, Bytes, SHA256, RelativePath
+
+`Encoding` records what produced the bytes. It is not, on its own, the
+right thing to score a detector against: a byte sequence is frequently
+valid, and decodes identically, under many encodings at once. Pure-ASCII
+content is legitimately readable as us-ascii, utf-8, every Windows code
+page and every ISO-8859 part, simultaneously.
+
+`AlsoValidAs` is a semicolon-separated list of every other encoding that
+decodes that file's bytes to the *same characters*, and is empty when
+the declared encoding is the only correct answer.
+
+A benchmark harness should accept a detector's answer when it matches
+`Encoding` OR appears in `AlsoValidAs`. Scoring string equality against
+`Encoding` alone marks correct answers wrong - a detector reporting
+"ascii" for pure-ASCII content, if anything the more precise answer, is
+right, and this corpus says so.
+
+The set is computed from the bytes, not from which duplicate files the
+corpus happens to contain, so it is complete regardless of which
+encodings a given document was emitted in.
+
+`CategoryCode` is the two-digit code ("15") and is empty for fixtures
+with no numbered category; `Category` is always a plain name ("CJK").
+Directory names still use the combined "15-CJK" slug.
+
 ## Determinism
 
 Re-running `python GenerateCorpus.py` (or `... generate`) with an
@@ -205,10 +262,21 @@ since both record this run's wall-clock timestamp and duration.
 Two ways to re-check an already-generated corpus without regenerating it:
 
     python GenerateCorpus.py verify
+    python GenerateCorpus.py verify --corpus /path/to/UnicodeTestSuite
 
-or, on Linux/macOS, using the standard `sha256sum` format directly:
+This re-checks the metadata files against the SHA-256 values recorded in
+CorpusCertificate.txt, then every file against Manifest.csv, re-decoding
+each under its declared encoding, and finally fails if any file is
+present on disk but absent from the manifest. The certificate is the
+anchor: it is written last and covers MasterHashes.sha256 itself.
+
+Or, on Linux/macOS, using the standard `sha256sum` format directly:
 
     cd UnicodeTestSuite && sha256sum -c MasterHashes.sha256
+
+Note that sha256sum checks only the files listed in MasterHashes.sha256.
+It cannot detect an added file or a modified manifest; use
+`GenerateCorpus.py verify` for the whole chain.
 
 ## Source/ overrides (optional)
 
