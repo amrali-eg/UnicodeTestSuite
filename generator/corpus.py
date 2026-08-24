@@ -26,7 +26,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from generator.binary import generate_binary_fixtures
-from generator.categories import FIXTURE_CATEGORIES, SHARED_CATEGORIES, category_by_name
+from generator.categories import (
+    FIXTURE_CATEGORIES,
+    LONGFORM_CATEGORY,
+    SHARED_CATEGORIES,
+    category_by_name,
+)
 from generator.documents import Document, load_documents
 from generator.encoder import (
     CORE_UNICODE_SPECS,
@@ -37,6 +42,7 @@ from generator.encoder import (
 )
 from generator.filenames import assert_filename_contract, build_filename, sanitize_component
 from generator.hashing import sha256_bytes
+from generator.longform import load_long_form_documents
 from generator.verifier import verify_binary_file, verify_text_file
 
 DOC_FOLDER = "00_Documentation"
@@ -44,6 +50,7 @@ INVALID_FOLDER = "11_InvalidUnicode"
 LINE_ENDING_FOLDER = "12_LineEndings"
 BINARY_FOLDER = "13_Binary"
 LARGE_FILE_FOLDER = "14_LargeFiles"
+LONGFORM_FOLDER = "15_LongForm"
 
 ASCII_ROOT_FOLDER = "01_ASCII"
 
@@ -64,6 +71,7 @@ ALL_FOLDERS: tuple[str, ...] = (
     LINE_ENDING_FOLDER,
     BINARY_FOLDER,
     LARGE_FILE_FOLDER,
+    LONGFORM_FOLDER,
 )
 
 
@@ -405,6 +413,55 @@ def _generate_large_files(root: Path, documents: list[Document]) -> list[Generat
     return results
 
 
+def _generate_long_form(root: Path, project_root: Path) -> list[GeneratedFile]:
+    """15_LongForm: multi-kilobyte natural-language text per encoding.
+
+    Every other text folder holds short samples - a line or two - which
+    exercise codec round-trips but are far below what a statistical
+    detector needs to classify. These documents are several kilobytes
+    each and are emitted into UTF-8 plus every legacy encoding capable of
+    representing them, giving the corpus samples where byte-frequency and
+    bigram models can actually converge.
+
+    Each document is skipped for any encoding that cannot represent it,
+    using the same can_encode check the rest of the corpus uses, so a
+    script/code-page mismatch produces no file rather than mangled text.
+    """
+    documents = load_long_form_documents(project_root / "data" / "udhr")
+    if not documents:
+        return []
+
+    tokens = [LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name]
+    category_folder = LONGFORM_CATEGORY.slug
+
+    utf8_specs = (
+        EncodingSpec("utf-8", "utf-8", b"", LONGFORM_FOLDER, None),
+        EncodingSpec("utf-8", "utf-8", b"\xef\xbb\xbf", LONGFORM_FOLDER, None),
+    )
+    legacy_specs = [spec for family in LEGACY_FAMILIES for spec in family]
+
+    results: list[GeneratedFile] = []
+    for doc in documents:
+        for spec in utf8_specs:
+            filename = build_filename(
+                doc.doc_id, tokens, doc.title, spec.label, spec.bom_label, "LF")
+            relative_path = _posix_path(LONGFORM_FOLDER, spec.label, filename)
+            results.append(_write_and_verify_text(
+                root, relative_path, doc.text, spec, doc.doc_id, category_folder, "LF",
+            ))
+
+        for spec in legacy_specs:
+            if not can_encode(doc.text, spec.codec):
+                continue
+            filename = build_filename(
+                doc.doc_id, tokens, doc.title, spec.label, None, "LF")
+            relative_path = _posix_path(LONGFORM_FOLDER, sanitize_component(spec.label), filename)
+            results.append(_write_and_verify_text(
+                root, relative_path, doc.text, spec, doc.doc_id, category_folder, "LF",
+            ))
+    return results
+
+
 def generate_corpus(
     project_root: Path,
     output_root: Path | None = None,
@@ -434,5 +491,6 @@ def generate_corpus(
     records += _generate_line_ending_showcase(output_root, documents)
     records += generate_binary_fixtures(output_root, BINARY_FOLDER, verify_binary_file, sha256_bytes, GeneratedFile)
     records += _generate_large_files(output_root, documents)
+    records += _generate_long_form(output_root, project_root)
 
     return records, output_root, overrides

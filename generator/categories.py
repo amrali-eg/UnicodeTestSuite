@@ -103,6 +103,14 @@ FIXTURE_CATEGORIES: tuple[Category, ...] = (
 )
 
 
+# Long-form category (code 21): the multi-kilobyte natural-language
+# documents under 15_LongForm. Kept out of SHARED_CATEGORIES because
+# these are not part of the identical logical corpus re-encoded
+# everywhere - each is emitted only into the encodings that can actually
+# represent its script.
+LONGFORM_CATEGORY: Category = Category("21", "LongForm")
+
+
 # Binary-format stub categories, used only under 13_Binary. Fixed order.
 BINARY_CATEGORIES: tuple[str, ...] = (
     "EXE", "DLL", "PNG", "JPG", "GIF", "ZIP", "PDF",
