@@ -396,6 +396,84 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
     return results
 
 
+# Documents used for the line-ending matrix: one Latin, one Cyrillic,
+# one CJK, all from the shared group so the content is not pure ASCII.
+# Fixed ids, chosen for script spread and for encoding in a useful number
+# of legacy code pages.
+_MATRIX_DOC_IDS: tuple[str, ...] = (
+    "DOC000029",  # Latin / French
+    "DOC000044",  # Cyrillic / Russian
+    "DOC000066",  # CJK / Japanese
+)
+
+# Legacy codecs offered to the matrix. Each document is emitted only in
+# the ones that can represent it, via the usual can_encode check.
+_MATRIX_LEGACY_LABELS: frozenset[str] = frozenset({
+    "windows-1252", "iso-8859-1", "iso-8859-15",
+    "windows-1251", "koi8-r", "iso-8859-5",
+    "shift_jis", "euc-jp", "gb18030",
+})
+
+
+def _generate_line_ending_matrix(root: Path, documents: list[Document]) -> list[GeneratedFile]:
+    """12_LineEndings/Matrix: CR/LF/CRLF across encodings, not just UTF-8.
+
+    v2.0 varied the line terminator only within UTF-8, and only over nine
+    pure-ASCII documents, so 1,130 of its 1,212 files were LF and the
+    corpus contained no CRLF file in UTF-16, UTF-32, or any legacy code
+    page at all. That left the single most common byte pattern in real
+    Windows text - 0D 00 0A 00, CRLF in UTF-16LE - unrepresented, along
+    with CRLF in windows-1252, which is arguably the most common legacy
+    text file in existence. Several detectors use NUL placement and
+    line-terminator regularity as UTF-16 evidence, so the gap sat exactly
+    where the corpus was meant to be strongest.
+
+    Emitting the full matrix corpus-wide would have tripled the file
+    count for little extra signal, so this is a deliberate slice: three
+    documents spanning Latin, Cyrillic and CJK, in every core Unicode
+    encoding plus the legacy codecs that can represent them, each in all
+    three terminators. That yields directly comparable triples - same
+    document, same encoding, terminator the only variable.
+    """
+    by_id = {d.doc_id: d for d in documents}
+    core_specs = [
+        spec for spec in CORE_UNICODE_SPECS
+        if spec.label != "us-ascii" and not spec.label.startswith("utf-32")
+    ]
+    legacy_specs = [
+        spec for family in LEGACY_FAMILIES for spec in family
+        if spec.label in _MATRIX_LEGACY_LABELS
+    ]
+
+    results: list[GeneratedFile] = []
+    for doc_id in _MATRIX_DOC_IDS:
+        doc = by_id.get(doc_id)
+        if doc is None:
+            continue
+        for spec in core_specs + legacy_specs:
+            if not can_encode(doc.text, spec.codec):
+                continue
+            bom_label = spec.bom_label if spec in core_specs else None
+            for line_label, variant_text in _line_ending_variants(doc.text):
+                filename = build_filename(
+                    doc.doc_id,
+                    _category_filename_tokens(doc),
+                    doc.title,
+                    spec.label,
+                    bom_label,
+                    line_label,
+                )
+                relative_path = _posix_path(
+                    LINE_ENDING_FOLDER, "Matrix",
+                    sanitize_component(spec.label), filename,
+                )
+                results.append(_write_and_verify_text(
+                    root, relative_path, variant_text, spec, doc.doc_id,
+                    doc.category_code, doc.category_name, line_label,
+                ))
+    return results
+
+
 def _generate_large_files(root: Path, documents: list[Document]) -> list[GeneratedFile]:
     """14_LargeFiles: amplify a few representative documents into multi-MB files."""
     by_id = {d.doc_id: d for d in documents}
@@ -497,6 +575,7 @@ def generate_corpus(
     records += _generate_legacy_families(output_root, documents)
     records += _generate_invalid_unicode_files(output_root)
     records += _generate_line_ending_showcase(output_root, documents)
+    records += _generate_line_ending_matrix(output_root, documents)
     records += generate_binary_fixtures(output_root, BINARY_FOLDER, verify_binary_file, sha256_bytes, GeneratedFile)
     records += _generate_large_files(output_root, documents)
     records += _generate_long_form(output_root, project_root)
