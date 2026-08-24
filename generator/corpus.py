@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from generator.binary import generate_binary_fixtures
-from generator.categories import SHARED_CATEGORIES
+from generator.categories import FIXTURE_CATEGORIES, SHARED_CATEGORIES, category_by_name
 from generator.documents import Document, load_documents
 from generator.encoder import (
     CORE_UNICODE_SPECS,
@@ -35,7 +35,7 @@ from generator.encoder import (
     can_encode,
     encode_with_bom,
 )
-from generator.filenames import build_filename, sanitize_component
+from generator.filenames import assert_filename_contract, build_filename, sanitize_component
 from generator.hashing import sha256_bytes
 from generator.verifier import verify_binary_file, verify_text_file
 
@@ -133,6 +133,11 @@ def _write_and_verify_text(
     category_display: str,
     line_ending_label: str,
 ) -> GeneratedFile:
+    # Every file written through this function is document-derived, so the
+    # filename parsing contract applies without exception. Checked before
+    # the write so a violation aborts generation rather than shipping.
+    assert_filename_contract(relative_path.rsplit("/", 1)[-1], spec.label)
+
     data = encode_with_bom(text, spec)
     full_path = _full_path(root, relative_path)
     full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,26 +182,49 @@ def _generate_documentation_copies(root: Path, documents: list[Document]) -> lis
         results.append(_write_and_verify_text(root, relative_path, doc.text, spec, doc.doc_id, category_display, "LF"))
 
     categories_text = "\n".join(sorted({_category_folder_token(d) for d in documents})) + "\n"
-    _write_plain_reference(root, _posix_path(DOC_FOLDER, "Categories.txt"), categories_text)
+    results.append(_write_plain_reference(root, _posix_path(DOC_FOLDER, "Categories.txt"), categories_text))
 
     encoding_labels = sorted({s.label for s in CORE_UNICODE_SPECS}) + [
         f"{spec.label} ({family[0].root_folder})"
         for family in LEGACY_FAMILIES
         for spec in family
     ]
-    _write_plain_reference(root, _posix_path(DOC_FOLDER, "Encodings.txt"), "\n".join(encoding_labels) + "\n")
+    results.append(_write_plain_reference(root, _posix_path(DOC_FOLDER, "Encodings.txt"), "\n".join(encoding_labels) + "\n"))
 
     index_lines = [f"{d.doc_id}\t{_category_folder_token(d)}\t{d.title}" for d in documents]
-    _write_plain_reference(root, _posix_path(DOC_FOLDER, "SourceDocumentsIndex.txt"), "\n".join(index_lines) + "\n")
+    results.append(_write_plain_reference(root, _posix_path(DOC_FOLDER, "SourceDocumentsIndex.txt"), "\n".join(index_lines) + "\n"))
 
     return results
 
 
-def _write_plain_reference(root: Path, relative_path: str, text: str) -> None:
-    """Write a simple UTF-8 reference file with no verification bookkeeping."""
+def _write_plain_reference(root: Path, relative_path: str, text: str) -> GeneratedFile:
+    """Write a UTF-8 reference file and return its manifest record.
+
+    These files (Categories.txt, Encodings.txt, SourceDocumentsIndex.txt)
+    describe the corpus rather than being samples drawn from it, so they
+    carry DocumentID "N/A" and are exempt from the filename contract. In
+    v2.0 they were written with no bookkeeping at all, which left them
+    outside Manifest.csv and MasterHashes.sha256 - they could be edited
+    without either verification path noticing.
+    """
+    data = text.encode("utf-8")
     full_path = _full_path(root, relative_path)
     full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_text(text, encoding="utf-8", newline="\n")
+    full_path.write_bytes(data)
+
+    digest = sha256_bytes(data)
+    verify_binary_file(full_path, digest, len(data))
+    return GeneratedFile(
+        doc_id="N/A",
+        category="Documentation",
+        encoding_label="utf-8",
+        bom="NoBOM",
+        line_ending="LF",
+        characters=len(text),
+        size_bytes=len(data),
+        sha256=digest,
+        relative_path=relative_path,
+    )
 
 
 def _generate_ascii_folder(root: Path, documents: list[Document]) -> list[GeneratedFile]:
@@ -298,7 +326,9 @@ def _generate_invalid_unicode_files(root: Path) -> list[GeneratedFile]:
 def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> list[GeneratedFile]:
     """12_LineEndings: curated CR/LF/CRLF/None showcase across many categories."""
     by_id = {d.doc_id: d for d in documents}
-    # One representative document per category (mix of ASCII and shared groups).
+    # One representative document per ASCII category. (v2.0 described this
+    # as a "mix of ASCII and shared groups"; every ID here is at or below
+    # DOC000027, so all nine are in fact ASCII-group documents.)
     showcase_ids = [
         "DOC000001", "DOC000004", "DOC000007", "DOC000010", "DOC000013",
         "DOC000016", "DOC000019", "DOC000022", "DOC000025",
@@ -317,37 +347,35 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
                 root, relative_path, variant_text, spec, doc.doc_id, _category_folder_token(doc), line_label,
             ))
 
-    # Explicit "None" edge case: genuinely zero newline characters at all.
-    no_newline_text = "Single line document with absolutely no newline character at all."
-    no_newline_filename = "NoNewlineAtAll_UTF8_NoBOM_None.txt"
-    no_newline_path = _posix_path(LINE_ENDING_FOLDER, no_newline_filename)
-    data = encode_with_bom(no_newline_text, spec)
-    full_path = _full_path(root, no_newline_path)
-    full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_bytes(data)
-    digest = sha256_bytes(data)
-    verify_text_file(full_path, spec, no_newline_text, digest, len(data))
-    results.append(GeneratedFile(
-        doc_id="N/A", category="LineEndings", encoding_label="utf-8", bom="NoBOM",
-        line_ending="None", characters=len(no_newline_text), size_bytes=len(data),
-        sha256=digest, relative_path=no_newline_path,
-    ))
+    # Two explicit edge cases that are not derived from any canonical
+    # document. They still carry reserved DOC9xxxxx DocumentIDs and the
+    # 20-LineEndingEdge fixture category so their filenames satisfy the
+    # same parsing contract as every other .txt in the corpus - in v2.0
+    # these were hand-built strings with only four "_" tokens, which put
+    # the encoding out of reach at index 4 and silently broke consumers.
+    edge_category = category_by_name(FIXTURE_CATEGORIES, "LineEndingEdge")
+    edge_tokens = [edge_category.code, edge_category.name]
+    edge_cases = (
+        (
+            "DOC900001",
+            "NoNewlineAtAll",
+            "None",
+            "Single line document with absolutely no newline character at all.",
+        ),
+        (
+            "DOC900002",
+            "MixedLineEndings",
+            "Mixed",
+            "line one\r\nline two\nline three\rline four\r\n",
+        ),
+    )
+    for doc_id, title, line_label, text in edge_cases:
+        filename = build_filename(doc_id, edge_tokens, title, spec.label, spec.bom_label, line_label)
+        relative_path = _posix_path(LINE_ENDING_FOLDER, filename)
+        results.append(_write_and_verify_text(
+            root, relative_path, text, spec, doc_id, edge_category.slug, line_label,
+        ))
 
-    # Explicit "mixed within one file" edge case.
-    mixed_text = "line one\r\nline two\nline three\rline four\r\n"
-    mixed_filename = "MixedLineEndingsWithinOneFile_UTF8_NoBOM_Mixed.txt"
-    mixed_path = _posix_path(LINE_ENDING_FOLDER, mixed_filename)
-    data = encode_with_bom(mixed_text, spec)
-    full_path = _full_path(root, mixed_path)
-    full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_bytes(data)
-    digest = sha256_bytes(data)
-    verify_text_file(full_path, spec, mixed_text, digest, len(data))
-    results.append(GeneratedFile(
-        doc_id="N/A", category="LineEndings", encoding_label="utf-8", bom="NoBOM",
-        line_ending="Mixed", characters=len(mixed_text), size_bytes=len(data),
-        sha256=digest, relative_path=mixed_path,
-    ))
     return results
 
 
@@ -377,21 +405,25 @@ def _generate_large_files(root: Path, documents: list[Document]) -> list[Generat
     return results
 
 
-def generate_corpus(project_root: Path) -> tuple[list[GeneratedFile], Path]:
-    """Run the full generation pipeline and return (records, output_root).
+def generate_corpus(
+    project_root: Path,
+    output_root: Path | None = None,
+) -> tuple[list[GeneratedFile], Path, list[tuple[str, str]]]:
+    """Run the pipeline; return (records, output_root, source_overrides).
 
     The output directory (UnicodeTestSuite/) is deleted and recreated
     from scratch on every run so repeated runs never accumulate stale
     files from a previous generator version.
     """
-    output_root = project_root / "UnicodeTestSuite"
+    if output_root is None:
+        output_root = project_root / "UnicodeTestSuite"
     if output_root.exists():
         shutil.rmtree(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     for folder in ALL_FOLDERS:
         (output_root / folder).mkdir(parents=True, exist_ok=True)
 
-    documents = load_documents(project_root / "Source")
+    documents, overrides = load_documents(project_root / "Source")
 
     records: list[GeneratedFile] = []
     records += _generate_documentation_copies(output_root, documents)
@@ -403,4 +435,4 @@ def generate_corpus(project_root: Path) -> tuple[list[GeneratedFile], Path]:
     records += generate_binary_fixtures(output_root, BINARY_FOLDER, verify_binary_file, sha256_bytes, GeneratedFile)
     records += _generate_large_files(output_root, documents)
 
-    return records, output_root
+    return records, output_root, overrides

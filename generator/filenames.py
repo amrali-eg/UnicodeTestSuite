@@ -82,3 +82,54 @@ def build_filename(
         parts.append(sanitize_component(bom_label))
     parts.append(sanitize_component(line_ending_label))
     return "_".join(parts) + f".{extension}"
+
+
+class FilenameContractError(ValueError):
+    """Raised when a generated filename would violate the parsing contract."""
+
+
+# Index of the encoding field when a document filename is split on "_".
+ENCODING_TOKEN_INDEX = 4
+
+# Minimum number of "_"-separated tokens in a document filename:
+# DocumentID, CategoryCode, CategoryName, Title, Encoding, LineEnding.
+MINIMUM_TOKEN_COUNT = 6
+
+
+def assert_filename_contract(filename: str, encoding_label: str) -> None:
+    """Verify one document-derived filename satisfies the documented contract.
+
+    The contract, stated in README.md and relied on by consumers that
+    parse filenames instead of Manifest.csv:
+
+    - splitting the stem on "_" yields at least MINIMUM_TOKEN_COUNT tokens;
+    - token ENCODING_TOKEN_INDEX is the encoding, with any "_" in the
+      codec name normalized to "-".
+
+    Raises FilenameContractError on violation. Applied to every
+    document-derived file at generation time, so a hand-built filename
+    can never silently break the contract again (issue: the two
+    12_LineEndings fixtures in v2.0 carried only four tokens).
+
+    Non-document fixtures - the .bin files under 11_InvalidUnicode and
+    13_Binary, and the 00_Documentation reference files - are exempt by
+    design and are never passed to this function; they are documented as
+    non-document-derived.
+    """
+    stem = filename.rsplit(".", 1)[0]
+    tokens = stem.split("_")
+
+    if len(tokens) < MINIMUM_TOKEN_COUNT:
+        raise FilenameContractError(
+            f"{filename!r} splits into {len(tokens)} tokens on '_', "
+            f"but the contract requires at least {MINIMUM_TOKEN_COUNT}; "
+            f"token {ENCODING_TOKEN_INDEX} would be unreachable"
+        )
+
+    expected = sanitize_component(encoding_label)
+    actual = tokens[ENCODING_TOKEN_INDEX]
+    if actual != expected:
+        raise FilenameContractError(
+            f"{filename!r} carries {actual!r} at token "
+            f"{ENCODING_TOKEN_INDEX}, expected {expected!r}"
+        )

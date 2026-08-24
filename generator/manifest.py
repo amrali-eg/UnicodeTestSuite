@@ -12,6 +12,7 @@ import csv
 import sqlite3
 from pathlib import Path
 
+from generator import MANIFEST_VERSION
 from generator.corpus import GeneratedFile
 
 CSV_HEADER = (
@@ -74,6 +75,11 @@ def write_manifest_sqlite(records: list[GeneratedFile], path: Path) -> None:
         ]
         cursor.executemany(
             "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+        )
+        cursor.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        cursor.executemany(
+            "INSERT INTO meta VALUES (?, ?)",
+            [("manifest_version", MANIFEST_VERSION)],
         )
         cursor.execute("CREATE INDEX idx_category ON files(category)")
         cursor.execute("CREATE INDEX idx_encoding ON files(encoding)")

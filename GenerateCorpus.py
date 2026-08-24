@@ -36,10 +36,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from generator import GENERATOR_VERSION
-from generator.certificate import write_certificate
+from generator import GENERATOR_VERSION, MANIFEST_VERSION
+from generator.certificate import METADATA_FILES, parse_metadata_hashes, write_certificate
 from generator.corpus import generate_corpus
 from generator.documents import document_count
+from generator.filenames import FilenameContractError
+from generator.hashing import sha256_file
 from generator.manifest import (
     read_manifest_csv,
     write_html_index,
@@ -217,17 +219,64 @@ optional; an empty `Source/` directory is the normal, expected state.
 """
 
 
-def _run_generate() -> int:
+def _resolve_target(explicit: str | None) -> Path:
+    """Corpus directory to operate on: --corpus if given, else the default."""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return PROJECT_ROOT / "UnicodeTestSuite"
+
+
+def _confirm_destroy(output_root: Path, force: bool) -> bool:
+    """Decide whether an existing corpus directory may be deleted.
+
+    v2.0 called shutil.rmtree unconditionally, in a script whose own
+    docstring invites double-clicking, on a directory with the same name
+    as the published release archive. Extracting the release next to the
+    generator and running it destroyed the download with no prompt.
+    """
+    if not output_root.exists():
+        return True
+    if force:
+        return True
+
+    entry_count = sum(1 for _ in output_root.rglob("*"))
+    print(f"\nWARNING: {output_root} already exists and holds {entry_count:,} entries.")
+    print("Generating will DELETE it and rebuild from scratch.")
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("Refusing to delete it in a non-interactive session.")
+        print("Re-run with --force if that is what you want.")
+        return False
+
+    try:
+        answer = input("Delete and regenerate? [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
+def _run_generate(corpus_dir: str | None = None, force: bool = False) -> int:
+    output_root = _resolve_target(corpus_dir)
+
     print(f"Unicode Test Suite Generator (UTS) v{GENERATOR_VERSION}")
     print(f"Project root: {PROJECT_ROOT}")
+    print(f"Target:       {output_root}")
     print(f"Canonical source documents: {document_count()}")
-    print("Generating corpus...")
 
+    if not _confirm_destroy(output_root, force):
+        print("Aborted. Nothing was deleted.")
+        return 1
+
+    print("Generating corpus...")
     started = time.monotonic()
     try:
-        records, output_root = generate_corpus(PROJECT_ROOT)
+        records, output_root, overrides = generate_corpus(PROJECT_ROOT, output_root)
     except CorpusIntegrityError as exc:
         print("\nFATAL: corpus integrity check failed. Generation aborted.")
+        print(f"Reason: {exc}")
+        return 1
+    except FilenameContractError as exc:
+        print("\nFATAL: a generated filename violates the parsing contract.")
         print(f"Reason: {exc}")
         return 1
     except Exception:
@@ -237,6 +286,8 @@ def _run_generate() -> int:
 
     elapsed = time.monotonic() - started
     print(f"Generated and verified {len(records):,} files in {elapsed:.2f} seconds.")
+    if overrides:
+        print(f"NOTE: {len(overrides)} Source/ override(s) applied; not the canonical corpus.")
 
     print("Writing Manifest.csv ...")
     write_manifest_csv(records, output_root / "Manifest.csv")
@@ -245,14 +296,14 @@ def _run_generate() -> int:
     write_manifest_sqlite(records, output_root / "Manifest.sqlite")
 
     print("Writing MasterHashes.sha256 ...")
-    master_hashes_path = output_root / "MasterHashes.sha256"
-    write_master_hashes(records, master_hashes_path)
+    write_master_hashes(records, output_root / "MasterHashes.sha256")
+
+    print("Writing ManifestVersion.txt ...")
+    (output_root / "ManifestVersion.txt").write_text(
+        MANIFEST_VERSION + "\n", encoding="utf-8", newline="\n")
 
     print("Writing Statistics.txt ...")
     write_statistics(records, elapsed, output_root / "Statistics.txt")
-
-    print("Writing CorpusCertificate.txt ...")
-    write_certificate(records, elapsed, master_hashes_path, output_root / "CorpusCertificate.txt")
 
     print("Writing Index.html ...")
     write_html_index(records, output_root / "Index.html")
@@ -261,13 +312,52 @@ def _run_generate() -> int:
     readme_text = README_TEMPLATE.format(version=GENERATOR_VERSION, doc_count=document_count())
     (output_root / "README.md").write_text(readme_text, encoding="utf-8", newline="\n")
 
+    # Written last, so it can hash everything above it and anchor the chain.
+    print("Writing CorpusCertificate.txt ...")
+    write_certificate(records, elapsed, output_root, output_root / "CorpusCertificate.txt", overrides)
+
     print("\nDone.")
     print(f"Corpus written to: {output_root}")
     return 0
 
 
-def _run_verify() -> int:
-    output_root = PROJECT_ROOT / "UnicodeTestSuite"
+def _verify_metadata_chain(output_root: Path) -> str | None:
+    """Re-check the metadata files against CorpusCertificate.txt.
+
+    Returns an error string, or None when the chain is intact.
+    """
+    certificate_path = output_root / "CorpusCertificate.txt"
+    if not certificate_path.is_file():
+        return f"{certificate_path} not found; cannot anchor the integrity chain"
+
+    recorded = parse_metadata_hashes(certificate_path.read_text(encoding="utf-8"))
+    for name in METADATA_FILES:
+        path = output_root / name
+        if name not in recorded:
+            return f"certificate does not record a hash for {name}"
+        if not path.is_file():
+            return f"{name} is listed in the certificate but missing from disk"
+        actual = sha256_file(path)
+        if actual != recorded[name]:
+            return f"{name} SHA-256 mismatch: certificate says {recorded[name]}, disk has {actual}"
+    return None
+
+
+def _find_unlisted_files(output_root: Path, listed: set[str]) -> list[str]:
+    """Corpus files present on disk but absent from the manifest."""
+    known = listed | set(METADATA_FILES) | {"CorpusCertificate.txt"}
+    found = []
+    for path in sorted(output_root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(output_root).as_posix()
+        if relative not in known:
+            found.append(relative)
+    return found
+
+
+def _run_verify(corpus_dir: str | None = None) -> int:
+    output_root = _resolve_target(corpus_dir)
     manifest_path = output_root / "Manifest.csv"
 
     print(f"Unicode Test Suite Generator (UTS) v{GENERATOR_VERSION} - verify mode")
@@ -276,6 +366,13 @@ def _run_verify() -> int:
     if not manifest_path.is_file():
         print(f"\nFATAL: {manifest_path} not found. Run 'generate' first.")
         return 1
+
+    print("Checking metadata chain against CorpusCertificate.txt ...")
+    chain_error = _verify_metadata_chain(output_root)
+    if chain_error is not None:
+        print(f"\nFATAL: metadata chain broken. {chain_error}")
+        return 1
+    print(f"  {len(METADATA_FILES)} metadata files match the certificate.")
 
     rows = read_manifest_csv(manifest_path)
     print(f"Re-checking {len(rows):,} files listed in Manifest.csv ...")
@@ -298,8 +395,19 @@ def _run_verify() -> int:
             return 1
         checked += 1
 
+    print("Scanning for files not listed in the manifest ...")
+    unlisted = _find_unlisted_files(output_root, {r["RelativePath"] for r in rows})
+    if unlisted:
+        print(f"\nFATAL: {len(unlisted)} file(s) present on disk but absent from Manifest.csv:")
+        for relative in unlisted[:20]:
+            print(f"  {relative}")
+        if len(unlisted) > 20:
+            print(f"  ... and {len(unlisted) - 20} more")
+        return 1
+
     elapsed = time.monotonic() - started
     print(f"All {checked:,} files verified OK in {elapsed:.2f} seconds.")
+    print("Metadata chain intact; no unlisted files.")
     return 0
 
 
@@ -313,14 +421,26 @@ def main() -> int:
         nargs="?",
         default="generate",
         choices=("generate", "verify"),
-        help="'generate' (default) rebuilds UnicodeTestSuite/ from scratch; "
-             "'verify' re-checks an existing UnicodeTestSuite/ without rebuilding.",
+        help="'generate' (default) rebuilds the corpus from scratch; "
+             "'verify' re-checks an existing corpus without rebuilding.",
+    )
+    parser.add_argument(
+        "--corpus",
+        metavar="DIR",
+        default=None,
+        help="corpus directory to build or verify "
+             "(default: UnicodeTestSuite/ next to this script)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="allow 'generate' to delete an existing corpus directory without asking",
     )
     args = parser.parse_args()
 
     if args.command == "verify":
-        return _run_verify()
-    return _run_generate()
+        return _run_verify(args.corpus)
+    return _run_generate(args.corpus, args.force)
 
 
 if __name__ == "__main__":
