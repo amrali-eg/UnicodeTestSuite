@@ -120,7 +120,33 @@ simply not emitted in an encoding that cannot represent it. Spanish `ñ`
 is correctly absent from ISO-8859-2, Dutch `ë` from KOI8-R, Ukrainian
 `ґ` from ISO-8859-5.
 
-Known consequence: `ChineseTraditional` is **not** emitted in Big5. Its
-text contains U+75E9 and U+8991 (3 occurrences in 3,733 characters),
-which Big5 genuinely lacks. Substituting them would corrupt the text, so
-the document is skipped for that encoding instead.
+Known consequences, each a genuine limit rather than a defect:
+
+- `ChineseTraditional` is **not** emitted in Big5. Its text contains
+  U+75E9 and U+8991 (3 occurrences in 3,733 characters), which Big5
+  genuinely lacks. Substituting them would corrupt the text.
+- `French` is **not** emitted in ISO-8859-1 or ISO-8859-15: the text uses
+  U+2019 for its apostrophes and neither part carries it. It *is* emitted
+  in windows-1252, which does. That is the punctuation asymmetry above
+  working as intended.
+- `Bulgarian` is **not** emitted in ISO-8859-5, blocked by U+2013.
+- `Romanian` is emitted in **no** legacy encoding at all. Correct modern
+  orthography needs S and T with comma below (U+0218..U+021B), which live
+  in ISO-8859-16 — excluded from this corpus because .NET has no code
+  page for it. windows-1250 and ISO-8859-2 carry only the cedilla forms.
+
+## Language and encoding pairing
+
+A long-form document is emitted only into encodings that historically
+carried its language, listed as `LONGFORM_ENCODINGS` in
+`generator/longform.py`. This is deliberately narrower than "every
+encoding that can represent the text": GB18030 encodes all of Unicode and
+EUC-JP covers Latin letters, so an unrestricted corpus produces German in
+EUC-JP and Polish in GB18030.
+
+Those files are valid encodings of the document and meaningless as
+detection targets — their byte statistics are Latin, because the text is
+— so they depress a benchmark score without saying anything about the
+detector. Measured against a real detector: 92.3% accuracy where the
+language matched the encoding, 60.0% where it did not, with cross-script
+pairings outnumbering real ones 70 to 52.

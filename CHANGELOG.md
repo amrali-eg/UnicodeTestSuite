@@ -110,12 +110,28 @@ bigram models and need hundreds of bytes to converge, so every detector
 failed that portion for the same uninformative reason and the benchmark
 could not tell a strong one from a weak one.
 
-`15_LongForm` adds 170 files across 29 encodings, 122 of them legacy,
-with a median of 13,649 bytes and none under 64. Source is the UDHR in
-Unicode project, pinned by SHA-256; see `data/udhr/PROVENANCE.md` for the
+`15_LongForm` adds 99 files across 29 encodings, 51 of them legacy, with
+a median of 13,027 bytes and none under 64. Source is the UDHR in Unicode
+project, pinned by SHA-256; see `data/udhr/PROVENANCE.md` for the
 artifact, the attribution, the two documented substitutions, and the
 sources considered and rejected. The short samples are kept — they remain
 good round-trip tests.
+
+Each document is emitted only into encodings that historically carried
+its language, not into every encoding that can represent the bytes.
+GB18030 can encode German and EUC-JP can encode Polish, but a detector
+cannot be expected to name German prose as EUC-JP — the byte statistics
+are Latin, because the text is. Measured against a real detector, the
+long-form set scored 92.3% where language matched encoding and 60.0%
+where it did not; cross-script pairings outnumbered real ones 70 to 52,
+which hid the benefit of length entirely. Restricting them raised
+long-form legacy accuracy from 73.8% to 92.2%, against 72.2% for the
+short samples — the effect the folder was added to produce.
+
+Romanian is emitted in UTF-8 only. Its orthography needs S and T with
+comma below (U+0218..U+021B), which live in ISO-8859-16, excluded because
+.NET has no code page for it; windows-1250 and ISO-8859-2 carry only the
+cedilla forms.
 
 #### `12_LineEndings/Matrix`: CR and CRLF beyond UTF-8
 
@@ -176,14 +192,15 @@ and CRLF. CR/CRLF coverage goes from 1 encoding to 12.
 
 | Item | v2.0 | v3.0 |
 | --- | ---: | ---: |
-| Total generated files | 1,212 | 1,430 |
+| Total generated files | 1,212 | 1,359 |
 | Canonical documents | 94 | 94 |
 | Long-form documents | 0 | 24 |
 | Root folders | 15 | 16 |
 | Distinct encodings | 35 | 35 |
 | Encoding spec variants (BOM counted separately) | 40 | 40 |
-| Legacy sample median | 31 B | 56 B |
+| Legacy sample median | 31 B | 40 B |
 | Legacy sample maximum | 125 B | 27,819 B |
+| Legacy long-form samples | 0 | 51 |
 | Encodings with CR/CRLF | 1 | 12 |
 | Files covered by MasterHashes | 1,212 of 1,222 | all |
 

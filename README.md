@@ -153,7 +153,7 @@ Version 3.0 contains:
 | Distinct encodings | 35 |
 | Canonical documents | 94 |
 | Long-form documents | 24 |
-| Generated files | 1,430 |
+| Generated files | 1,359 |
 
 The corpus includes:
 
@@ -213,13 +213,25 @@ encoding capable of representing it:
 
 | | Files | Median | Under 64 B |
 |---|---:|---:|---:|
-| Short legacy samples | 326 | 31 B | 82% |
-| `15_LongForm/` legacy samples | 122 | 13,649 B | 0% |
+| Short legacy samples | 317 | 35 B | 82% |
+| `15_LongForm/` legacy samples | 51 | 13,027 B | 0% |
 
 Long-form source text comes from the UDHR in Unicode project, pinned by
 SHA-256; see `data/udhr/PROVENANCE.md` for the artifact, its attribution
 and copyright notice, the two documented character substitutions, and the
 sources that were considered and rejected.
+
+Each long-form document is emitted **only into the encodings that
+historically carried its language**, not into every encoding capable of
+representing the bytes. GB18030 can encode German and EUC-JP can encode
+Polish, but no detector can be expected to identify German prose as
+EUC-JP: the byte statistics look like Latin text, because that is what
+they are. Such a file is a valid encoding and a meaningless detection
+target. Measured against a real detector, accuracy on the long-form set
+was 92.3% where the language matched the encoding and 60.0% where it did
+not, and the cross-script pairings outnumbered the real ones 70 to 52 -
+enough to hide the benefit of long-form samples entirely. The mapping is
+`LONGFORM_ENCODINGS` in `generator/longform.py`.
 
 ## Automatic Verification
 

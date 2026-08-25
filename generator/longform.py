@@ -56,6 +56,76 @@ LONGFORM_SOURCES: tuple[tuple[str, str], ...] = (
     ("udhr_cmn_hant.txt", "ChineseTraditional"),
 )
 
+# Legacy encodings each long-form document is emitted into.
+#
+# Deliberately narrower than "every encoding that can represent the text".
+# EUC-JP can encode German, and GB18030 can encode anything at all, but a
+# detector cannot be expected to identify German prose as EUC-JP: the byte
+# statistics look like Latin text, because that is what they are. Such a
+# file is a valid encoding of the document and a meaningless detection
+# target, and emitting it only depresses a benchmark score without saying
+# anything about the detector.
+#
+# Measured against a real detector on the unrestricted corpus: 92.3%
+# accuracy where the language matched the encoding, 60.0% where it did not,
+# with the cross-script pairings outnumbering the real ones 70 to 52 and
+# hiding the effect entirely.
+#
+# Each entry lists the encodings that historically carried that language.
+# The generator still applies the usual can_encode check on top, so a pair
+# listed here but not actually representable is skipped rather than forced.
+LONGFORM_ENCODINGS: dict[str, tuple[str, ...]] = {
+    # Western European: Latin-1 and its Windows and Latin-9 counterparts.
+    "German":     ("windows-1252", "iso-8859-1", "iso-8859-15"),
+    "French":     ("windows-1252", "iso-8859-1", "iso-8859-15"),
+    "Spanish":    ("windows-1252", "iso-8859-1", "iso-8859-15"),
+    "Portuguese": ("windows-1252", "iso-8859-1", "iso-8859-15"),
+    "Italian":    ("windows-1252", "iso-8859-1", "iso-8859-15"),
+    "Dutch":      ("windows-1252", "iso-8859-1", "iso-8859-15"),
+
+    # Central European: Latin-2 and windows-1250.
+    "Polish":     ("windows-1250", "iso-8859-2"),
+    "Czech":      ("windows-1250", "iso-8859-2"),
+    "Hungarian":  ("windows-1250", "iso-8859-2"),
+    # Romanian has no legacy encoding in this corpus. Correct modern
+    # orthography needs S and T with comma below (U+0218..U+021B), which
+    # live in ISO-8859-16 - excluded because .NET has no code page for it.
+    # windows-1250 and ISO-8859-2 carry only the cedilla forms, so they
+    # cannot represent the text and would be skipped anyway; recording the
+    # gap is more honest than listing pairings that never fire.
+    "Romanian":   (),
+
+    # Cyrillic. ISO-8859-5 lacks Ukrainian ghe with upturn, and KOI8-R
+    # lacks the Ukrainian letters KOI8-U adds, so the lists differ.
+    "Russian":    ("windows-1251", "iso-8859-5", "koi8-r"),
+    "Ukrainian":  ("windows-1251", "koi8-u"),
+    "Bulgarian":  ("windows-1251", "iso-8859-5"),
+
+    # Single-script code pages.
+    "Greek":      ("windows-1253", "iso-8859-7"),
+    "Hebrew":     ("windows-1255", "iso-8859-8"),
+    "Arabic":     ("windows-1256", "iso-8859-6"),
+    "Turkish":    ("windows-1254", "iso-8859-9", "iso-8859-3"),
+    "Vietnamese": ("windows-1258",),
+
+    # Baltic.
+    "Lithuanian": ("windows-1257", "iso-8859-13", "iso-8859-4"),
+    "Latvian":    ("windows-1257", "iso-8859-13", "iso-8859-4"),
+
+    # East Asian. GB18030 belongs to Chinese despite covering all of
+    # Unicode; it is the modern PRC standard, not a universal fallback.
+    "Japanese":          ("shift_jis", "euc-jp"),
+    "Korean":            ("euc-kr", "iso-2022-kr"),
+    "ChineseSimplified": ("gb2312", "gb18030"),
+    "ChineseTraditional": ("big5", "gb18030"),
+}
+
+
+def legacy_encodings_for(title: str) -> tuple[str, ...]:
+    """Legacy encoding labels appropriate to a long-form document."""
+    return LONGFORM_ENCODINGS.get(title, ())
+
+
 # Substitutions applied to every long-form body before encoding, each
 # documented in data/udhr/PROVENANCE.md. Both are chosen to unlock real
 # encodings without altering content or destroying detection signal.

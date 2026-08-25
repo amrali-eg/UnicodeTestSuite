@@ -44,7 +44,7 @@ from generator.encoder import (
 )
 from generator.filenames import assert_filename_contract, build_filename, sanitize_component
 from generator.hashing import sha256_bytes
-from generator.longform import load_long_form_documents
+from generator.longform import legacy_encodings_for, load_long_form_documents
 from generator.verifier import verify_binary_file, verify_text_file
 
 DOC_FOLDER = "00_Documentation"
@@ -528,7 +528,11 @@ def _generate_long_form(root: Path, project_root: Path) -> list[GeneratedFile]:
         EncodingSpec("utf-8", "utf-8", b"", LONGFORM_FOLDER, None),
         EncodingSpec("utf-8", "utf-8", b"\xef\xbb\xbf", LONGFORM_FOLDER, None),
     )
-    legacy_specs = [spec for family in LEGACY_FAMILIES for spec in family]
+    legacy_by_label = {
+        spec.label: spec
+        for family in LEGACY_FAMILIES
+        for spec in family
+    }
 
     results: list[GeneratedFile] = []
     for doc in documents:
@@ -540,8 +544,12 @@ def _generate_long_form(root: Path, project_root: Path) -> list[GeneratedFile]:
                 root, relative_path, doc.text, spec, doc.doc_id, LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name, "LF",
             ))
 
-        for spec in legacy_specs:
-            if not can_encode(doc.text, spec.codec):
+        # Only the encodings that historically carried this language, not
+        # every encoding capable of representing the bytes. See
+        # LONGFORM_ENCODINGS for why the difference matters.
+        for label in legacy_encodings_for(doc.title):
+            spec = legacy_by_label.get(label)
+            if spec is None or not can_encode(doc.text, spec.codec):
                 continue
             filename = build_filename(
                 doc.doc_id, tokens, doc.title, spec.label, None, "LF")
