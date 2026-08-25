@@ -19,6 +19,8 @@ Every generated file is deterministically produced from a canonical Unicode sour
 
 - Deterministic corpus generation
 - Bit-identical reproducible output
+- Set-valued detection ground truth
+- Long-form natural-language samples
 - Cross-platform
 - Versioned releases
 - Machine-readable metadata
@@ -78,6 +80,17 @@ The following properties are guaranteed for every document-derived filename:
 
 These guarantees allow filenames to be parsed without consulting `Manifest.csv`, making the corpus suitable for automated testing and validation tools.
 
+Every one of these properties is asserted at generation time, for every
+document-derived file, and generation aborts if any filename would break
+them. (In v2.0 two hand-built `.txt` filenames carried only four tokens,
+putting the encoding out of reach at index 4; consumers parsing filenames
+skipped them silently rather than failing. See CHANGELOG.md.)
+
+The `.bin` fixtures under `11_InvalidUnicode/` and `13_Binary/` are **not**
+document-derived and deliberately do not follow this format, as are the
+three reference files in `00_Documentation/`. Filter on `.txt` with a
+`DOC`-prefixed `DocumentID`, or use `Manifest.csv`.
+
 ### Supported Encodings
 
 #### Unicode Transformation Formats
@@ -98,8 +111,9 @@ These guarantees allow filenames to be parsed without consulting `Manifest.csv`,
 
 - Invalid Unicode test cases
 - Binary signature corpus
-- Line-ending corpus
+- Line-ending corpus, including a CR/LF/CRLF matrix across encodings
 - Large-file corpus
+- Long-form natural-language corpus (24 languages, multi-kilobyte)
 
 ---
 
@@ -130,14 +144,16 @@ the generated corpus is guaranteed to be **byte-for-byte identical**.
 
 ## Corpus Contents
 
-Version 1.0 contains approximately:
+Version 3.0 contains:
 
 | Item | Count |
 |------|------:|
-| Categories | ~14 |
-| Supported encodings | ~51 |
+| Root folders | 16 |
+| Categories | 21 |
+| Distinct encodings | 35 |
 | Canonical documents | 94 |
-| Generated files | ~1,300 |
+| Long-form documents | 24 |
+| Generated files | 1,359 |
 
 The corpus includes:
 
@@ -145,10 +161,77 @@ The corpus includes:
 - Legacy encodings
 - Invalid Unicode samples
 - Binary signature files
-- Line-ending variants
+- Line-ending variants, including CR/CRLF across UTF-16, UTF-32 and legacy code pages
 - Large text files
+- Long-form natural-language text, several kilobytes per encoding
 
 ---
+
+## Detection Ground Truth
+
+A byte sequence is frequently valid, and decodes identically, under many
+encodings at once. Pure-ASCII content is legitimately readable as
+`us-ascii`, `utf-8`, every Windows code page and every ISO-8859 part —
+all at the same time.
+
+`Manifest.csv` therefore carries an **`AlsoValidAs`** column listing every
+other encoding that decodes a file's bytes to the *same characters*.
+Ground truth is a set, not a single string:
+
+```text
+Encoding:     utf-8
+AlsoValidAs:  big5;euc-jp;...;us-ascii;windows-1250;...;windows-1258
+```
+
+**Benchmark harnesses should score set membership**, accepting a detector's
+answer when it is either the declared `Encoding` or a member of
+`AlsoValidAs`. Scoring string equality against `Encoding` alone penalizes
+correct answers: a detector reporting `ascii` for pure-ASCII content — if
+anything the more precise answer — is right, and the corpus says so.
+
+The set is computed from the bytes themselves rather than from which
+duplicates the corpus happens to contain, so it is complete regardless of
+which encodings a given document was emitted in. Equality is tested on
+decoded characters, not on byte round-tripping: every single-byte codec
+reverses arbitrary input exactly, so a round-trip test would call UTF-8
+Japanese "also valid as iso-8859-1", which is mojibake rather than an
+alternative reading.
+
+---
+
+## Sample Length
+
+Detection and round-tripping need different things from a corpus, so it
+provides both.
+
+The per-category documents are short by design — a line or two — which
+exercises codec round-trips precisely. Statistical detectors
+(uchardet, chardet, UTF.Unknown and other Mozilla-UDE descendants) build
+byte-frequency and bigram models and need hundreds of bytes to converge,
+so `15_LongForm/` supplies multi-kilobyte natural-language text in every
+encoding capable of representing it:
+
+| | Files | Median | Under 64 B |
+|---|---:|---:|---:|
+| Short legacy samples | 317 | 35 B | 82% |
+| `15_LongForm/` legacy samples | 51 | 13,027 B | 0% |
+
+Long-form source text comes from the UDHR in Unicode project, pinned by
+SHA-256; see `data/udhr/PROVENANCE.md` for the artifact, its attribution
+and copyright notice, the two documented character substitutions, and the
+sources that were considered and rejected.
+
+Each long-form document is emitted **only into the encodings that
+historically carried its language**, not into every encoding capable of
+representing the bytes. GB18030 can encode German and EUC-JP can encode
+Polish, but no detector can be expected to identify German prose as
+EUC-JP: the byte statistics look like Latin text, because that is what
+they are. Such a file is a valid encoding and a meaningless detection
+target. Measured against a real detector, accuracy on the long-form set
+was 92.3% where the language matched the encoding and 60.0% where it did
+not, and the cross-script pairings outnumbered the real ones 70 to 52 -
+enough to hide the benefit of long-form samples entirely. The mapping is
+`LONGFORM_ENCODINGS` in `generator/longform.py`.
 
 ## Automatic Verification
 
@@ -173,8 +256,19 @@ Every corpus release contains:
 
 - `Manifest.csv`
 - `Manifest.sqlite`
+- `ManifestVersion.txt`
 - `MasterHashes.sha256`
 - `CorpusCertificate.txt`
+
+The certificate is the anchor of the chain. It is written last and records
+the SHA-256 of every metadata file that `MasterHashes.sha256` cannot cover,
+including `MasterHashes.sha256` itself:
+
+```text
+CorpusCertificate.txt
+  -> MasterHashes.sha256, Manifest.csv, Manifest.sqlite, ...
+       -> every generated file
+```
 
 Verify an existing corpus using the generator:
 
@@ -182,11 +276,37 @@ Verify an existing corpus using the generator:
 python GenerateCorpus.py verify
 ```
 
-Or verify directly using the standard SHA-256 format:
+or, for a corpus that lives somewhere else:
+
+```bash
+python GenerateCorpus.py verify --corpus /path/to/UnicodeTestSuite
+```
+
+`verify` re-checks the metadata hashes against the certificate, re-checks
+every file against the manifest, re-decodes each one under its declared
+encoding, and fails if any file is present on disk but absent from the
+manifest.
+
+Or verify the file hashes alone using the standard SHA-256 format:
 
 ```bash
 sha256sum -c MasterHashes.sha256
 ```
+
+Note that `sha256sum` checks only the files listed in
+`MasterHashes.sha256`; it cannot detect an added file or a modified
+manifest. Use `GenerateCorpus.py verify` for the full chain.
+
+### Regenerating
+
+```bash
+python GenerateCorpus.py generate
+```
+
+Generation deletes and rebuilds the corpus directory. If it already
+exists, the generator asks for confirmation; pass `--force` to skip the
+prompt in a non-interactive session, and `--corpus DIR` to build
+somewhere other than the default.
 
 ---
 
@@ -224,10 +344,10 @@ If the `Source/` directory is empty (the normal and recommended state), the buil
 Every generated corpus records:
 
 - Generator version
+- Manifest version
 - Python version
 - Platform
 - Unicode version
-- Manifest version
 - Generation timestamp
 - SHA-256 master hash
 
@@ -240,11 +360,14 @@ UnicodeTestSuiteGenerator/
 ¦
 +-- GenerateCorpus.py          # Corpus generator
 +-- generator/                 # Generator source code
++-- tests/                     # Generator unit tests
++-- data/udhr/                 # Vendored long-form source text
 +-- Source/                    # Optional document overrides
 +-- UnicodeTestSuite/          # Generated benchmark corpus
     ¦
     +--- Manifest.csv
     +--- Manifest.sqlite
+    +--- ManifestVersion.txt
     +--- MasterHashes.sha256
     +--- CorpusCertificate.txt
     +--- Index.html
@@ -273,7 +396,22 @@ Unicode Test Suite is intended for:
 
 The project uses separate licenses for code and generated data.
 
-| Component | License |
-|----------|---------|
-| Generator | MIT License |
-| Generated corpus | CC BY 4.0 |
+| Component | License | File |
+|----------|---------|------|
+| Generator | MIT License | `LICENSE` |
+| Generated corpus | CC BY 4.0 | `LICENSE-CORPUS` |
+
+The long-form documents under `15_LongForm/` are derived from the UDHR in
+Unicode project and remain subject to the notice carried by their source
+files, preserved verbatim in `data/udhr/`. The CC BY 4.0 grant does not
+extend to that third-party text. See `data/udhr/PROVENANCE.md`.
+
+## Related Projects
+
+[`chardet/test-data`](https://github.com/chardet/test-data) is a large
+corpus of natural, real-world encoded text assembled for the chardet
+detector. It complements this project rather than overlapping with it:
+UTS is synthetic, deterministic and hash-verified, with machine-readable
+ground truth; chardet's data is messy and organic, and its files are
+individually copyright their respective publishers. Running a detector
+against both is worthwhile.

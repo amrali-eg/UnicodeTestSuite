@@ -36,10 +36,16 @@ optional.
 
 from __future__ import annotations
 
+import hashlib
+
 from dataclasses import dataclass
 from pathlib import Path
 
 from generator.categories import ASCII_CATEGORIES, SHARED_CATEGORIES, Category
+
+LF = chr(10)
+CR = chr(13)
+CRLF = CR + LF
 
 
 @dataclass(frozen=True)
@@ -111,6 +117,15 @@ _ASCII_RAW: dict[str, list[tuple[str, str]]] = {
 # Shared documents (identical logical corpus across Unicode encodings)
 # ---------------------------------------------------------------------
 
+# English is deliberately left pure ASCII. English genuinely has no
+# diacritics, and one honestly ASCII document in the Latin category is
+# worth keeping: it is the corpus's clearest case of legitimately
+# ambiguous ground truth, valid under every ASCII-superset encoding at
+# once. The manifest's AlsoValidAs column now states that explicitly
+# rather than asserting a single correct answer (see
+# generator/equivalence.py). Dutch, Norwegian and Hungarian were ASCII
+# only by accident - all three languages use diacritics - so they now
+# carry them.
 _LATIN_RAW: list[tuple[str, str]] = [
         ('English', 'Hello, how are you today?\nThe quick brown fox jumps over the lazy dog.\n'),
         ('French', 'Le café est prêt. Voilà une crème brûlée.\nÀ bientôt, mon ami!\n'),
@@ -118,15 +133,15 @@ _LATIN_RAW: list[tuple[str, str]] = [
         ('Spanish', '¿Cómo estás? Mañana iré al parque.\n'),
         ('Italian', 'Buongiorno! Come stai oggi?\nLa città è molto bella.\n'),
         ('Portuguese', 'A criação começou ontem à noite.\n'),
-        ('Dutch', 'Goedemorgen! Hoe gaat het met je?\n'),
+        ('Dutch', 'Goedemorgen! Hoe gaat het met jou?\nEén café, alsjeblieft.\n'),
         ('Swedish', 'Hej! Hur mår du idag?\n'),
-        ('Norwegian', 'Hei! Hvordan har du det?\n'),
+        ('Norwegian', 'Hei! Hvordan går det med deg?\n'),
         ('Danish', 'Hej! Hvordan går det?\n'),
         ('Finnish', 'Hei! Mitä kuuluu?\n'),
         ('Polish', 'Cześć! Dziękuję bardzo za pomoc.\n'),
         ('Czech', 'Ahoj! Jak se máš dnes?\n'),
         ('Slovak', 'Ahoj! Ako sa máš?\n'),
-        ('Hungarian', 'Szia! Hogy vagy ma?\n'),
+        ('Hungarian', 'Szia! Hogy vagy ma?\nJó reggelt kívánok!\n'),
         ('Romanian', 'Bună! Ce mai faci astăzi?\n'),
 ]
 
@@ -163,8 +178,8 @@ _SEA_RAW: list[tuple[str, str]] = [
 ]
 
 _CJK_RAW: list[tuple[str, str]] = [
-        ('ChineseSimplified', '你好，世界！\n'),
-        ('ChineseTraditional', '你好，世界！\n'),
+        ('ChineseSimplified', '你好，世界！\n汉字、国家、学习。\n'),
+        ('ChineseTraditional', '你好，世界！\n漢字、國家、學習。\n'),
         ('Japanese', 'こんにちは、世界。\n'),
         ('Korean', '안녕하세요! 세계\n'),
 ]
@@ -255,29 +270,43 @@ def _build_documents() -> list[Document]:
     return documents
 
 
-def load_documents(source_dir: Path) -> list[Document]:
-    """Build the full document list, applying Source/ overrides if present.
+def load_documents(source_dir: Path) -> tuple[list[Document], list[tuple[str, str]]]:
+    """Build the document list, applying Source/ overrides if present.
 
-    If Source/<doc_id>.txt exists it replaces the built-in text for
-    that document (decoded as UTF-8, universal newlines normalized to
-    '\\n'). Missing or empty Source/ directory is completely normal.
+    Returns (documents, overrides), where `overrides` is a list of
+    (document_id, sha256_of_override_file) pairs in document order -
+    empty when no override was applied.
+
+    The overrides are reported rather than swallowed because they change
+    the corpus content while leaving every field the certificate records
+    (generator version, Unicode version, platform) identical. Without
+    provenance, two corpora that agree on all of those can differ
+    arbitrarily and a hash mismatch is undiagnosable. The caller records
+    this in CorpusCertificate.txt.
+
+    If Source/<doc_id>.txt exists it replaces the built-in text for that
+    document (decoded as UTF-8, universal newlines normalized). Missing
+    or empty Source/ directory is completely normal.
     """
     documents = _build_documents()
     if not source_dir.is_dir():
-        return documents
+        return documents, []
 
-    overridden: list[Document] = []
+    resolved: list[Document] = []
+    overrides: list[tuple[str, str]] = []
     for doc in documents:
         override_path = source_dir / f"{doc.doc_id}.txt"
         if override_path.is_file():
-            raw = override_path.read_text(encoding="utf-8")
-            normalized = raw.replace("\r\n", "\n").replace("\r", "\n")
+            raw_bytes = override_path.read_bytes()
+            raw = raw_bytes.decode("utf-8")
+            normalized = raw.replace(CRLF, LF).replace(CR, LF)
             doc = Document(
                 doc_id=doc.doc_id, group=doc.group, category_code=doc.category_code,
                 category_name=doc.category_name, title=doc.title, text=normalized,
             )
-        overridden.append(doc)
-    return overridden
+            overrides.append((doc.doc_id, hashlib.sha256(raw_bytes).hexdigest()))
+        resolved.append(doc)
+    return resolved, overrides
 
 
 def document_count() -> int:

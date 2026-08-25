@@ -92,6 +92,25 @@ def category_by_name(categories: tuple[Category, ...], name: str) -> Category:
     raise KeyError(f"Unknown category: {name}")
 
 
+# Fixture categories (codes 20+): used by corpus fixtures that are not
+# derived from a canonical document but still need to satisfy the
+# document filename contract (see generator/filenames.py). Their files
+# carry reserved DocumentIDs from the DOC9xxxxx block, which the
+# sequential DOC000001.. assignment in generator/documents.py can never
+# reach, so the two numbering schemes can never collide.
+FIXTURE_CATEGORIES: tuple[Category, ...] = (
+    Category("20", "LineEndingEdge"),
+)
+
+
+# Long-form category (code 21): the multi-kilobyte natural-language
+# documents under 15_LongForm. Kept out of SHARED_CATEGORIES because
+# these are not part of the identical logical corpus re-encoded
+# everywhere - each is emitted only into the encodings that can actually
+# represent its script.
+LONGFORM_CATEGORY: Category = Category("21", "LongForm")
+
+
 # Binary-format stub categories, used only under 13_Binary. Fixed order.
 BINARY_CATEGORIES: tuple[str, ...] = (
     "EXE", "DLL", "PNG", "JPG", "GIF", "ZIP", "PDF",

@@ -12,11 +12,14 @@ import csv
 import sqlite3
 from pathlib import Path
 
+from generator import MANIFEST_VERSION
 from generator.corpus import GeneratedFile
+from generator.equivalence import format_also_valid_as
 
 CSV_HEADER = (
-    "DocumentID", "Category", "Encoding", "BOM", "LineEnding",
-    "Characters", "Bytes", "SHA256", "RelativePath",
+    "DocumentID", "CategoryCode", "Category", "Encoding", "BOM",
+    "AlsoValidAs", "LineEnding", "Characters", "Bytes", "SHA256",
+    "RelativePath",
 )
 
 
@@ -32,9 +35,11 @@ def write_manifest_csv(records: list[GeneratedFile], path: Path) -> None:
         for record in _sorted_records(records):
             writer.writerow([
                 record.doc_id,
+                record.category_code,
                 record.category,
                 record.encoding_label,
                 record.bom,
+                format_also_valid_as(record.also_valid_as),
                 record.line_ending,
                 record.characters,
                 record.size_bytes,
@@ -54,9 +59,11 @@ def write_manifest_sqlite(records: list[GeneratedFile], path: Path) -> None:
             """
             CREATE TABLE files (
                 document_id TEXT NOT NULL,
+                category_code TEXT NOT NULL,
                 category TEXT NOT NULL,
                 encoding TEXT NOT NULL,
                 bom TEXT NOT NULL,
+                also_valid_as TEXT NOT NULL,
                 line_ending TEXT NOT NULL,
                 characters INTEGER NOT NULL,
                 bytes INTEGER NOT NULL,
@@ -67,13 +74,19 @@ def write_manifest_sqlite(records: list[GeneratedFile], path: Path) -> None:
         )
         rows = [
             (
-                r.doc_id, r.category, r.encoding_label, r.bom, r.line_ending,
+                r.doc_id, r.category_code, r.category, r.encoding_label, r.bom,
+                format_also_valid_as(r.also_valid_as), r.line_ending,
                 r.characters, r.size_bytes, r.sha256, r.relative_path,
             )
             for r in _sorted_records(records)
         ]
         cursor.executemany(
-            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+        )
+        cursor.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        cursor.executemany(
+            "INSERT INTO meta VALUES (?, ?)",
+            [("manifest_version", MANIFEST_VERSION)],
         )
         cursor.execute("CREATE INDEX idx_category ON files(category)")
         cursor.execute("CREATE INDEX idx_encoding ON files(encoding)")

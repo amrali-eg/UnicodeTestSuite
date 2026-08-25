@@ -25,18 +25,26 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from generator.binary import generate_binary_fixtures
-from generator.categories import SHARED_CATEGORIES
+from generator.binary import classify_fixture, generate_binary_fixtures
+from generator.categories import (
+    FIXTURE_CATEGORIES,
+    LONGFORM_CATEGORY,
+    SHARED_CATEGORIES,
+    category_by_name,
+)
 from generator.documents import Document, load_documents
+from generator.equivalence import compatible_encodings
 from generator.encoder import (
     CORE_UNICODE_SPECS,
     LEGACY_FAMILIES,
     EncodingSpec,
     can_encode,
     encode_with_bom,
+    strip_bom,
 )
-from generator.filenames import build_filename, sanitize_component
+from generator.filenames import assert_filename_contract, build_filename, sanitize_component
 from generator.hashing import sha256_bytes
+from generator.longform import legacy_encodings_for, load_long_form_documents
 from generator.verifier import verify_binary_file, verify_text_file
 
 DOC_FOLDER = "00_Documentation"
@@ -44,6 +52,7 @@ INVALID_FOLDER = "11_InvalidUnicode"
 LINE_ENDING_FOLDER = "12_LineEndings"
 BINARY_FOLDER = "13_Binary"
 LARGE_FILE_FOLDER = "14_LargeFiles"
+LONGFORM_FOLDER = "15_LongForm"
 
 ASCII_ROOT_FOLDER = "01_ASCII"
 
@@ -64,6 +73,7 @@ ALL_FOLDERS: tuple[str, ...] = (
     LINE_ENDING_FOLDER,
     BINARY_FOLDER,
     LARGE_FILE_FOLDER,
+    LONGFORM_FOLDER,
 )
 
 
@@ -72,9 +82,11 @@ class GeneratedFile:
     """One row of metadata describing a single generated corpus file."""
 
     doc_id: str
-    category: str
+    category_code: str          # "15", or "" for fixtures with no numbered category
+    category: str               # plain name, e.g. "CJK" - never the "15-CJK" slug
     encoding_label: str
     bom: str
+    also_valid_as: tuple[str, ...]  # other encodings that decode these bytes identically
     line_ending: str
     characters: int
     size_bytes: int
@@ -130,9 +142,15 @@ def _write_and_verify_text(
     text: str,
     spec: EncodingSpec,
     doc_id: str,
-    category_display: str,
+    category_code: str,
+    category_name: str,
     line_ending_label: str,
 ) -> GeneratedFile:
+    # Every file written through this function is document-derived, so the
+    # filename parsing contract applies without exception. Checked before
+    # the write so a violation aborts generation rather than shipping.
+    assert_filename_contract(relative_path.rsplit("/", 1)[-1], spec.label)
+
     data = encode_with_bom(text, spec)
     full_path = _full_path(root, relative_path)
     full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,9 +161,11 @@ def _write_and_verify_text(
 
     return GeneratedFile(
         doc_id=doc_id,
-        category=category_display,
+        category_code=category_code,
+        category=category_name,
         encoding_label=spec.label,
         bom=spec.bom_label,
+        also_valid_as=compatible_encodings(strip_bom(data, spec), spec.label, text),
         line_ending=line_ending_label,
         characters=len(text),
         size_bytes=len(data),
@@ -173,30 +193,57 @@ def _generate_documentation_copies(root: Path, documents: list[Document]) -> lis
         tokens = _category_filename_tokens(doc)
         filename = build_filename(doc.doc_id, tokens, doc.title, "utf-8", "NoBOM", "LF")
         relative_path = _posix_path(DOC_FOLDER, filename)
-        category_display = _category_folder_token(doc)
-        results.append(_write_and_verify_text(root, relative_path, doc.text, spec, doc.doc_id, category_display, "LF"))
+        results.append(_write_and_verify_text(root, relative_path, doc.text, spec, doc.doc_id, doc.category_code, doc.category_name, "LF"))
 
     categories_text = "\n".join(sorted({_category_folder_token(d) for d in documents})) + "\n"
-    _write_plain_reference(root, _posix_path(DOC_FOLDER, "Categories.txt"), categories_text)
+    results.append(_write_plain_reference(root, _posix_path(DOC_FOLDER, "Categories.txt"), categories_text))
 
     encoding_labels = sorted({s.label for s in CORE_UNICODE_SPECS}) + [
         f"{spec.label} ({family[0].root_folder})"
         for family in LEGACY_FAMILIES
         for spec in family
     ]
-    _write_plain_reference(root, _posix_path(DOC_FOLDER, "Encodings.txt"), "\n".join(encoding_labels) + "\n")
+    results.append(_write_plain_reference(root, _posix_path(DOC_FOLDER, "Encodings.txt"), "\n".join(encoding_labels) + "\n"))
 
     index_lines = [f"{d.doc_id}\t{_category_folder_token(d)}\t{d.title}" for d in documents]
-    _write_plain_reference(root, _posix_path(DOC_FOLDER, "SourceDocumentsIndex.txt"), "\n".join(index_lines) + "\n")
+    results.append(_write_plain_reference(root, _posix_path(DOC_FOLDER, "SourceDocumentsIndex.txt"), "\n".join(index_lines) + "\n"))
 
     return results
 
 
-def _write_plain_reference(root: Path, relative_path: str, text: str) -> None:
-    """Write a simple UTF-8 reference file with no verification bookkeeping."""
+def _write_plain_reference(root: Path, relative_path: str, text: str) -> GeneratedFile:
+    """Write a UTF-8 reference file and return its manifest record.
+
+    These files (Categories.txt, Encodings.txt, SourceDocumentsIndex.txt)
+    describe the corpus rather than being samples drawn from it, so they
+    carry DocumentID "N/A" and are exempt from the filename contract. In
+    v2.0 they were written with no bookkeeping at all, which left them
+    outside Manifest.csv and MasterHashes.sha256 - they could be edited
+    without either verification path noticing.
+    """
+    data = text.encode("utf-8")
     full_path = _full_path(root, relative_path)
     full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_text(text, encoding="utf-8", newline="\n")
+    full_path.write_bytes(data)
+
+    digest = sha256_bytes(data)
+    verify_binary_file(full_path, digest, len(data))
+    return GeneratedFile(
+        doc_id="N/A",
+        category_code="",
+        category="Documentation",
+        encoding_label="utf-8",
+        bom="NoBOM",
+        # These are pure ASCII in practice, so they are valid under every
+        # ASCII-superset encoding just like any other corpus file. Hardcoding
+        # an empty set made a detector answering us-ascii look wrong.
+        also_valid_as=compatible_encodings(data, "utf-8", text),
+        line_ending="LF",
+        characters=len(text),
+        size_bytes=len(data),
+        sha256=digest,
+        relative_path=relative_path,
+    )
 
 
 def _generate_ascii_folder(root: Path, documents: list[Document]) -> list[GeneratedFile]:
@@ -212,7 +259,7 @@ def _generate_ascii_folder(root: Path, documents: list[Document]) -> list[Genera
             category_folder = _category_folder_token(doc)
             relative_path = _posix_path(ASCII_ROOT_FOLDER, category_folder, filename)
             results.append(_write_and_verify_text(
-                root, relative_path, variant_text, spec, doc.doc_id, category_folder, line_label,
+                root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
             ))
     return results
 
@@ -238,7 +285,7 @@ def _generate_core_unicode_folders(root: Path, documents: list[Document]) -> lis
                 category_folder = _category_folder_token(doc)
                 relative_path = _posix_path(spec.root_folder, category_folder, filename)
                 results.append(_write_and_verify_text(
-                    root, relative_path, variant_text, spec, doc.doc_id, category_folder, line_label,
+                    root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
                 ))
     return results
 
@@ -258,7 +305,7 @@ def _generate_legacy_families(root: Path, documents: list[Document]) -> list[Gen
                     category_folder = _category_folder_token(doc)
                     relative_path = _posix_path(spec.root_folder, spec.family_subfolder, category_folder, filename)
                     results.append(_write_and_verify_text(
-                        root, relative_path, variant_text, spec, doc.doc_id, category_folder, line_label,
+                        root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
                     ))
     return results
 
@@ -287,9 +334,11 @@ def _generate_invalid_unicode_files(root: Path) -> list[GeneratedFile]:
         full_path.write_bytes(data)
         digest = sha256_bytes(data)
         verify_binary_file(full_path, digest, len(data))
+        label, bom, also = classify_fixture(data)
         results.append(GeneratedFile(
-            doc_id="N/A", category="InvalidUnicode", encoding_label="Binary",
-            bom="N/A", line_ending="N/A", characters=0,
+            doc_id="N/A", category_code="", category="InvalidUnicode",
+            encoding_label=label, bom=bom, also_valid_as=also,
+            line_ending="N/A", characters=0,
             size_bytes=len(data), sha256=digest, relative_path=relative_path,
         ))
     return results
@@ -298,7 +347,9 @@ def _generate_invalid_unicode_files(root: Path) -> list[GeneratedFile]:
 def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> list[GeneratedFile]:
     """12_LineEndings: curated CR/LF/CRLF/None showcase across many categories."""
     by_id = {d.doc_id: d for d in documents}
-    # One representative document per category (mix of ASCII and shared groups).
+    # One representative document per ASCII category. (v2.0 described this
+    # as a "mix of ASCII and shared groups"; every ID here is at or below
+    # DOC000027, so all nine are in fact ASCII-group documents.)
     showcase_ids = [
         "DOC000001", "DOC000004", "DOC000007", "DOC000010", "DOC000013",
         "DOC000016", "DOC000019", "DOC000022", "DOC000025",
@@ -314,40 +365,116 @@ def _generate_line_ending_showcase(root: Path, documents: list[Document]) -> lis
             filename = build_filename(doc.doc_id, tokens, doc.title, "utf-8", "NoBOM", line_label)
             relative_path = _posix_path(LINE_ENDING_FOLDER, filename)
             results.append(_write_and_verify_text(
-                root, relative_path, variant_text, spec, doc.doc_id, _category_folder_token(doc), line_label,
+                root, relative_path, variant_text, spec, doc.doc_id, doc.category_code, doc.category_name, line_label,
             ))
 
-    # Explicit "None" edge case: genuinely zero newline characters at all.
-    no_newline_text = "Single line document with absolutely no newline character at all."
-    no_newline_filename = "NoNewlineAtAll_UTF8_NoBOM_None.txt"
-    no_newline_path = _posix_path(LINE_ENDING_FOLDER, no_newline_filename)
-    data = encode_with_bom(no_newline_text, spec)
-    full_path = _full_path(root, no_newline_path)
-    full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_bytes(data)
-    digest = sha256_bytes(data)
-    verify_text_file(full_path, spec, no_newline_text, digest, len(data))
-    results.append(GeneratedFile(
-        doc_id="N/A", category="LineEndings", encoding_label="utf-8", bom="NoBOM",
-        line_ending="None", characters=len(no_newline_text), size_bytes=len(data),
-        sha256=digest, relative_path=no_newline_path,
-    ))
+    # Two explicit edge cases that are not derived from any canonical
+    # document. They still carry reserved DOC9xxxxx DocumentIDs and the
+    # 20-LineEndingEdge fixture category so their filenames satisfy the
+    # same parsing contract as every other .txt in the corpus - in v2.0
+    # these were hand-built strings with only four "_" tokens, which put
+    # the encoding out of reach at index 4 and silently broke consumers.
+    edge_category = category_by_name(FIXTURE_CATEGORIES, "LineEndingEdge")
+    edge_tokens = [edge_category.code, edge_category.name]
+    edge_cases = (
+        (
+            "DOC900001",
+            "NoNewlineAtAll",
+            "None",
+            "Single line document with absolutely no newline character at all.",
+        ),
+        (
+            "DOC900002",
+            "MixedLineEndings",
+            "Mixed",
+            "line one\r\nline two\nline three\rline four\r\n",
+        ),
+    )
+    for doc_id, title, line_label, text in edge_cases:
+        filename = build_filename(doc_id, edge_tokens, title, spec.label, spec.bom_label, line_label)
+        relative_path = _posix_path(LINE_ENDING_FOLDER, filename)
+        results.append(_write_and_verify_text(
+            root, relative_path, text, spec, doc_id, edge_category.code, edge_category.name, line_label,
+        ))
 
-    # Explicit "mixed within one file" edge case.
-    mixed_text = "line one\r\nline two\nline three\rline four\r\n"
-    mixed_filename = "MixedLineEndingsWithinOneFile_UTF8_NoBOM_Mixed.txt"
-    mixed_path = _posix_path(LINE_ENDING_FOLDER, mixed_filename)
-    data = encode_with_bom(mixed_text, spec)
-    full_path = _full_path(root, mixed_path)
-    full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_bytes(data)
-    digest = sha256_bytes(data)
-    verify_text_file(full_path, spec, mixed_text, digest, len(data))
-    results.append(GeneratedFile(
-        doc_id="N/A", category="LineEndings", encoding_label="utf-8", bom="NoBOM",
-        line_ending="Mixed", characters=len(mixed_text), size_bytes=len(data),
-        sha256=digest, relative_path=mixed_path,
-    ))
+    return results
+
+
+# Documents used for the line-ending matrix: one Latin, one Cyrillic,
+# one CJK, all from the shared group so the content is not pure ASCII.
+# Fixed ids, chosen for script spread and for encoding in a useful number
+# of legacy code pages.
+_MATRIX_DOC_IDS: tuple[str, ...] = (
+    "DOC000029",  # Latin / French
+    "DOC000044",  # Cyrillic / Russian
+    "DOC000066",  # CJK / Japanese
+)
+
+# Legacy codecs offered to the matrix. Each document is emitted only in
+# the ones that can represent it, via the usual can_encode check.
+_MATRIX_LEGACY_LABELS: frozenset[str] = frozenset({
+    "windows-1252", "iso-8859-1", "iso-8859-15",
+    "windows-1251", "koi8-r", "iso-8859-5",
+    "shift_jis", "euc-jp", "gb18030",
+})
+
+
+def _generate_line_ending_matrix(root: Path, documents: list[Document]) -> list[GeneratedFile]:
+    """12_LineEndings/Matrix: CR/LF/CRLF across encodings, not just UTF-8.
+
+    v2.0 varied the line terminator only within UTF-8, and only over nine
+    pure-ASCII documents, so 1,130 of its 1,212 files were LF and the
+    corpus contained no CRLF file in UTF-16, UTF-32, or any legacy code
+    page at all. That left the single most common byte pattern in real
+    Windows text - 0D 00 0A 00, CRLF in UTF-16LE - unrepresented, along
+    with CRLF in windows-1252, which is arguably the most common legacy
+    text file in existence. Several detectors use NUL placement and
+    line-terminator regularity as UTF-16 evidence, so the gap sat exactly
+    where the corpus was meant to be strongest.
+
+    Emitting the full matrix corpus-wide would have tripled the file
+    count for little extra signal, so this is a deliberate slice: three
+    documents spanning Latin, Cyrillic and CJK, in every core Unicode
+    encoding plus the legacy codecs that can represent them, each in all
+    three terminators. That yields directly comparable triples - same
+    document, same encoding, terminator the only variable.
+    """
+    by_id = {d.doc_id: d for d in documents}
+    core_specs = [
+        spec for spec in CORE_UNICODE_SPECS
+        if spec.label != "us-ascii" and not spec.label.startswith("utf-32")
+    ]
+    legacy_specs = [
+        spec for family in LEGACY_FAMILIES for spec in family
+        if spec.label in _MATRIX_LEGACY_LABELS
+    ]
+
+    results: list[GeneratedFile] = []
+    for doc_id in _MATRIX_DOC_IDS:
+        doc = by_id.get(doc_id)
+        if doc is None:
+            continue
+        for spec in core_specs + legacy_specs:
+            if not can_encode(doc.text, spec.codec):
+                continue
+            bom_label = spec.bom_label if spec in core_specs else None
+            for line_label, variant_text in _line_ending_variants(doc.text):
+                filename = build_filename(
+                    doc.doc_id,
+                    _category_filename_tokens(doc),
+                    doc.title,
+                    spec.label,
+                    bom_label,
+                    line_label,
+                )
+                relative_path = _posix_path(
+                    LINE_ENDING_FOLDER, "Matrix",
+                    sanitize_component(spec.label), filename,
+                )
+                results.append(_write_and_verify_text(
+                    root, relative_path, variant_text, spec, doc.doc_id,
+                    doc.category_code, doc.category_name, line_label,
+                ))
     return results
 
 
@@ -372,26 +499,86 @@ def _generate_large_files(root: Path, documents: list[Document]) -> list[Generat
         filename = build_filename(doc.doc_id, tokens, f"{doc.title}x{repeats}", enc_label, spec.bom_label, "LF")
         relative_path = _posix_path(LARGE_FILE_FOLDER, filename)
         results.append(_write_and_verify_text(
-            root, relative_path, large_text, spec, doc.doc_id, _category_folder_token(doc), "LF",
+            root, relative_path, large_text, spec, doc.doc_id, doc.category_code, doc.category_name, "LF",
         ))
     return results
 
 
-def generate_corpus(project_root: Path) -> tuple[list[GeneratedFile], Path]:
-    """Run the full generation pipeline and return (records, output_root).
+def _generate_long_form(root: Path, project_root: Path) -> list[GeneratedFile]:
+    """15_LongForm: multi-kilobyte natural-language text per encoding.
+
+    Every other text folder holds short samples - a line or two - which
+    exercise codec round-trips but are far below what a statistical
+    detector needs to classify. These documents are several kilobytes
+    each and are emitted into UTF-8 plus every legacy encoding capable of
+    representing them, giving the corpus samples where byte-frequency and
+    bigram models can actually converge.
+
+    Each document is skipped for any encoding that cannot represent it,
+    using the same can_encode check the rest of the corpus uses, so a
+    script/code-page mismatch produces no file rather than mangled text.
+    """
+    documents = load_long_form_documents(project_root / "data" / "udhr")
+    if not documents:
+        return []
+
+    tokens = [LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name]
+
+    utf8_specs = (
+        EncodingSpec("utf-8", "utf-8", b"", LONGFORM_FOLDER, None),
+        EncodingSpec("utf-8", "utf-8", b"\xef\xbb\xbf", LONGFORM_FOLDER, None),
+    )
+    legacy_by_label = {
+        spec.label: spec
+        for family in LEGACY_FAMILIES
+        for spec in family
+    }
+
+    results: list[GeneratedFile] = []
+    for doc in documents:
+        for spec in utf8_specs:
+            filename = build_filename(
+                doc.doc_id, tokens, doc.title, spec.label, spec.bom_label, "LF")
+            relative_path = _posix_path(LONGFORM_FOLDER, spec.label, filename)
+            results.append(_write_and_verify_text(
+                root, relative_path, doc.text, spec, doc.doc_id, LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name, "LF",
+            ))
+
+        # Only the encodings that historically carried this language, not
+        # every encoding capable of representing the bytes. See
+        # LONGFORM_ENCODINGS for why the difference matters.
+        for label in legacy_encodings_for(doc.title):
+            spec = legacy_by_label.get(label)
+            if spec is None or not can_encode(doc.text, spec.codec):
+                continue
+            filename = build_filename(
+                doc.doc_id, tokens, doc.title, spec.label, None, "LF")
+            relative_path = _posix_path(LONGFORM_FOLDER, sanitize_component(spec.label), filename)
+            results.append(_write_and_verify_text(
+                root, relative_path, doc.text, spec, doc.doc_id, LONGFORM_CATEGORY.code, LONGFORM_CATEGORY.name, "LF",
+            ))
+    return results
+
+
+def generate_corpus(
+    project_root: Path,
+    output_root: Path | None = None,
+) -> tuple[list[GeneratedFile], Path, list[tuple[str, str]]]:
+    """Run the pipeline; return (records, output_root, source_overrides).
 
     The output directory (UnicodeTestSuite/) is deleted and recreated
     from scratch on every run so repeated runs never accumulate stale
     files from a previous generator version.
     """
-    output_root = project_root / "UnicodeTestSuite"
+    if output_root is None:
+        output_root = project_root / "UnicodeTestSuite"
     if output_root.exists():
         shutil.rmtree(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     for folder in ALL_FOLDERS:
         (output_root / folder).mkdir(parents=True, exist_ok=True)
 
-    documents = load_documents(project_root / "Source")
+    documents, overrides = load_documents(project_root / "Source")
 
     records: list[GeneratedFile] = []
     records += _generate_documentation_copies(output_root, documents)
@@ -400,7 +587,9 @@ def generate_corpus(project_root: Path) -> tuple[list[GeneratedFile], Path]:
     records += _generate_legacy_families(output_root, documents)
     records += _generate_invalid_unicode_files(output_root)
     records += _generate_line_ending_showcase(output_root, documents)
+    records += _generate_line_ending_matrix(output_root, documents)
     records += generate_binary_fixtures(output_root, BINARY_FOLDER, verify_binary_file, sha256_bytes, GeneratedFile)
     records += _generate_large_files(output_root, documents)
+    records += _generate_long_form(output_root, project_root)
 
-    return records, output_root
+    return records, output_root, overrides

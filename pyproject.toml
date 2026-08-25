@@ -1,0 +1,41 @@
+[project]
+name = "unicode-test-suite-generator"
+version = "3.0.0"
+description = "A deterministic, reproducible benchmark corpus generator for Unicode and text-encoding detection."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "amrali-eg" }]
+keywords = [
+    "unicode",
+    "encoding",
+    "charset",
+    "encoding-detection",
+    "test-corpus",
+    "benchmark",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Text Processing",
+]
+
+# The generator has no runtime dependencies and must keep it that way:
+# it uses nothing outside the standard library, which is what lets a
+# corpus be regenerated on any machine with a bare Python install and
+# still come out byte-identical.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/amrali-eg/UnicodeTestSuite"
+Releases = "https://github.com/amrali-eg/UnicodeTestSuite/releases"
+Issues = "https://github.com/amrali-eg/UnicodeTestSuite/issues"
+
+[tool.setuptools]
+packages = ["generator"]
