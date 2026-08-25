@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from generator.binary import generate_binary_fixtures
+from generator.binary import classify_fixture, generate_binary_fixtures
 from generator.categories import (
     FIXTURE_CATEGORIES,
     LONGFORM_CATEGORY,
@@ -331,9 +331,10 @@ def _generate_invalid_unicode_files(root: Path) -> list[GeneratedFile]:
         full_path.write_bytes(data)
         digest = sha256_bytes(data)
         verify_binary_file(full_path, digest, len(data))
+        label, bom, also = classify_fixture(data)
         results.append(GeneratedFile(
             doc_id="N/A", category_code="", category="InvalidUnicode",
-            encoding_label="Binary", bom="N/A", also_valid_as=(),
+            encoding_label=label, bom=bom, also_valid_as=also,
             line_ending="N/A", characters=0,
             size_bytes=len(data), sha256=digest, relative_path=relative_path,
         ))

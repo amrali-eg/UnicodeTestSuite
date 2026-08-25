@@ -132,6 +132,40 @@ _VARIANT_SIZES: dict[str, int] = {
 }
 
 
+def classify_fixture(data: bytes) -> tuple[str, str, tuple[str, ...]]:
+    """Return (encoding_label, bom_label, also_valid_as) for a fixture.
+
+    Most fixtures here are genuinely non-text and are labelled "Binary".
+    A few are not, and saying otherwise makes a correct detector look
+    wrong: `EmbeddedUtf8Bom.bin` is the string "before\n<U+FEFF>middle\n
+    after\n", which is ordinary UTF-8 text that happens to carry a BOM
+    somewhere other than offset 0. Reported against v3.0 by a real
+    consumer as a false positive; the detector was right and the corpus
+    was wrong.
+
+    The rule is deliberately narrow. A fixture counts as text only when
+    it decodes as well-formed UTF-8 *and* contains no NUL byte. UTF-8
+    well-formedness is self-validating - unlike a single-byte codec,
+    which accepts any input and so proves nothing - and NUL is the
+    universal binary signal, so a detector calling a NUL-bearing file
+    non-text is right even when the remaining bytes are ASCII.
+
+    These fixtures stay under 13_Binary on purpose. A detector that
+    classifies by directory or by file extension rather than by content
+    should get them wrong; that is what they are for.
+    """
+    if b"\x00" in data:
+        return "Binary", "N/A", ()
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "Binary", "N/A", ()
+
+    bom = "BOM" if data.startswith(b"\xef\xbb\xbf") else "NoBOM"
+    also = ("us-ascii",) if data and max(data) < 0x80 else ()
+    return "utf-8", bom, also
+
+
 def generate_binary_fixtures(
     root: Path,
     binary_folder: str,
@@ -156,9 +190,10 @@ def generate_binary_fixtures(
             full_path.write_bytes(data)
             digest = sha256_bytes(data)
             verify_binary_file(full_path, digest, len(data))
+            label, bom, also = classify_fixture(data)
             results.append(generated_file_cls(
                 doc_id="N/A", category_code="", category=category,
-                encoding_label="Binary", bom="N/A", also_valid_as=(),
+                encoding_label=label, bom=bom, also_valid_as=also,
                 line_ending="N/A", characters=0,
                 size_bytes=len(data), sha256=digest, relative_path=relative_path,
             ))
@@ -194,9 +229,10 @@ def generate_binary_fixtures(
         full_path.write_bytes(data)
         digest = sha256_bytes(data)
         verify_binary_file(full_path, digest, len(data))
+        label, bom, also = classify_fixture(data)
         results.append(generated_file_cls(
             doc_id="N/A", category_code="", category="Random",
-            encoding_label="Binary", bom="N/A", also_valid_as=(),
+            encoding_label=label, bom=bom, also_valid_as=also,
             line_ending="N/A", characters=0,
             size_bytes=len(data), sha256=digest, relative_path=relative_path,
         ))
