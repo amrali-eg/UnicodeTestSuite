@@ -234,7 +234,10 @@ def _write_plain_reference(root: Path, relative_path: str, text: str) -> Generat
         category="Documentation",
         encoding_label="utf-8",
         bom="NoBOM",
-        also_valid_as=(),
+        # These are pure ASCII in practice, so they are valid under every
+        # ASCII-superset encoding just like any other corpus file. Hardcoding
+        # an empty set made a detector answering us-ascii look wrong.
+        also_valid_as=compatible_encodings(data, "utf-8", text),
         line_ending="LF",
         characters=len(text),
         size_bytes=len(data),
