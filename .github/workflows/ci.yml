@@ -16,8 +16,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - name: Run unit tests
@@ -31,8 +31,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -63,7 +63,7 @@ jobs:
           sha256sum UnicodeTestSuite/MasterHashes.sha256 \
             | cut -d' ' -f1 > master-hash-${{ matrix.os }}.txt
           cat master-hash-${{ matrix.os }}.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: master-hash-${{ matrix.os }}
           path: master-hash-${{ matrix.os }}.txt
@@ -73,7 +73,7 @@ jobs:
     needs: corpus
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: master-hash-*
           merge-multiple: true
@@ -91,8 +91,8 @@ jobs:
     name: verify detects tampering
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: python GenerateCorpus.py generate --force
